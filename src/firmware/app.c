@@ -127,9 +127,39 @@ void app_init()
 
 void app_process()
 {
+	static bool sport_exit_armed = false;
+	static bool prev_brake = false;
 	uint8_t target_current = 0;
 	uint8_t target_cadence = assist_level_data.level.max_cadence_percent;
 	uint8_t throttle_percent = throttle_map_response(throttle_read());
+	bool brake_active = brake_is_activated();
+
+	if (operation_mode == OPERATION_MODE_SPORT)
+	{
+		if (!prev_brake && brake_active && throttle_percent < 20)
+		{
+			sport_exit_armed = true;
+		}
+
+		if (sport_exit_armed)
+		{
+			if (!brake_active)
+			{
+				sport_exit_armed = false;
+			}
+			else if (throttle_percent > 90)
+			{
+				app_set_operation_mode(OPERATION_MODE_DEFAULT);
+				sport_exit_armed = false;
+			}
+		}
+	}
+	else
+	{
+		sport_exit_armed = false;
+	}
+
+	prev_brake = brake_active;
 
 	bool pas_engaged = false;
 	bool throttle_override = false;
