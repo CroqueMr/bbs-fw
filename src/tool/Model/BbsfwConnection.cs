@@ -49,6 +49,8 @@ namespace BBSFW.Model
 		private const int OPCODE_WRITE_CONFIG =			0xf1;
 		private const int OPCODE_WRITE_RESET_CONFIG =	0xf2;
 		private const int OPCODE_WRITE_ADC_VOLTAGE_CALIBRATION = 0xf3;
+		private const int REQUEST_TYPE_BAFANG_WRITE = 			0x16;
+		private const int OPCODE_BAFANG_DISPLAY_WRITE_MODE = 	0x0c;
 
 		private const int Keep = 0;
 		private const int Discard = -1;
@@ -180,11 +182,17 @@ namespace BBSFW.Model
 			return await _writeResetConfigCq.WaitResponse(timeout);
 		}
 
-		public async Task<RequestResult<bool>> CalibrateBatteryVoltage(float actualVolts, TimeSpan timeout)
-		{
-			SendWriteVoltageCalibration(actualVolts);
-			return await _writeVoltageCalibrationCq.WaitResponse(timeout);
-		}
+                public async Task<RequestResult<bool>> CalibrateBatteryVoltage(float actualVolts, TimeSpan timeout)
+                {
+                        SendWriteVoltageCalibration(actualVolts);
+                        return await _writeVoltageCalibrationCq.WaitResponse(timeout);
+                }
+
+                public Task<RequestResult<bool>> SetOperationMode(bool sport, TimeSpan timeout)
+                {
+                        SendWriteOperationMode(sport);
+                        return Task.FromResult(new RequestResult<bool>(false, true));
+                }
 
 
 		private void OnDataReceived(object sender, SerialDataReceivedEventArgs e)
@@ -556,7 +564,7 @@ namespace BBSFW.Model
 			var buf = new List<byte>();
 			buf.Add(REQUEST_TYPE_READ);
 			buf.Add(opcode);
-			buf.Add(ComputeChecksum(buf, buf.Count));
+			                        buf.Add(ComputeChecksum(buf, buf.Count));
 
 			_port.Write(buf.ToArray(), 0, buf.Count);
 		}
@@ -602,19 +610,30 @@ namespace BBSFW.Model
 			_port.Write(buf.ToArray(), 0, buf.Count);
 		}
 
-		private void SendWriteVoltageCalibration(float volts)
-		{
-			uint volts_x100 = (uint)(volts * 100);
+               private void SendWriteVoltageCalibration(float volts)
+               {
+                       uint volts_x100 = (uint)(volts * 100);
 
-			var buf = new List<byte>();
-			buf.Add(REQUEST_TYPE_WRITE);
-			buf.Add(OPCODE_WRITE_ADC_VOLTAGE_CALIBRATION);
-			buf.Add((byte)(volts_x100 >> 8));
-			buf.Add((byte)volts_x100);
-			buf.Add(ComputeChecksum(buf, buf.Count));
+                       var buf = new List<byte>();
+                       buf.Add(REQUEST_TYPE_WRITE);
+                       buf.Add(OPCODE_WRITE_ADC_VOLTAGE_CALIBRATION);
+                       buf.Add((byte)(volts_x100 >> 8));
+                       buf.Add((byte)volts_x100);
+                       buf.Add(ComputeChecksum(buf, buf.Count));
 
-			_port.Write(buf.ToArray(), 0, buf.Count);
-		}
+                       _port.Write(buf.ToArray(), 0, buf.Count);
+               }
+
+               private void SendWriteOperationMode(bool sport)
+               {
+                       var buf = new List<byte>();
+                       buf.Add(REQUEST_TYPE_BAFANG_WRITE);
+                       buf.Add(OPCODE_BAFANG_DISPLAY_WRITE_MODE);
+                       buf.Add((byte)(sport ? 0x04 : 0x02));
+                       buf.Add(ComputeChecksum(buf, buf.Count));
+
+                       _port.Write(buf.ToArray(), 0, buf.Count);
+               }
 
 		private bool SetupConnection(TimeSpan timeout)
 		{

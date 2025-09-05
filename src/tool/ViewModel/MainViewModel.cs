@@ -70,12 +70,12 @@ namespace BBSFW.ViewModel
 
 		public MainViewModel()
 		{
-			ConfigVm = new ConfigurationViewModel();
+                        ConfigVm = new ConfigurationViewModel();
 
-			ConnectionVm = new ConnectionViewModel();
-			SystemVm = new SystemViewModel(ConfigVm);
-			AssistLevelsVm = new AssistLevelsViewModel(ConfigVm);
-			CalibrationVm = new CalibrationViewModel(ConnectionVm);
+                        ConnectionVm = new ConnectionViewModel();
+                        SystemVm = new SystemViewModel(ConfigVm, ConnectionVm);
+                        AssistLevelsVm = new AssistLevelsViewModel(ConfigVm);
+                        CalibrationVm = new CalibrationViewModel(ConnectionVm);
 			EventLogVm = new EventLogViewModel();
 
 
