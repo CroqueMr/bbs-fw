@@ -278,13 +278,25 @@ void app_set_lights(bool on)
 	}
 	else
 	{
-		if (g_config.lights_mode == LIGHTS_MODE_DEFAULT && lights_state != on)
-		{
-			lights_state = on;
-			eventlog_write_data(EVT_DATA_LIGHTS, on);
-			lights_set(on);
-		}
-	}
+                if (g_config.lights_mode == LIGHTS_MODE_DEFAULT && lights_state != on)
+                {
+                        bool turning_on = (!lights_state && on);
+                        lights_state = on;
+                        eventlog_write_data(EVT_DATA_LIGHTS, on);
+                        lights_set(on);
+
+                        if (
+                                turning_on &&
+                                operation_mode == OPERATION_MODE_DEFAULT &&
+                                assist_level == ASSIST_0 &&
+                                brake_is_activated() &&
+                                throttle_map_response(throttle_read()) > 90
+                           )
+                        {
+                                app_set_operation_mode(OPERATION_MODE_SPORT);
+                        }
+                }
+        }
 }
 
 void app_set_operation_mode(uint8_t mode)
