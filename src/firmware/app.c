@@ -466,15 +466,23 @@ void apply_pas_torque(uint8_t* target_current)
 
 void apply_cruise(uint8_t* target_current, uint8_t throttle_percent)
 {
-	static bool cruise_block_throttle_return = false;
+        static bool cruise_block_throttle_return = false;
+        static uint8_t cruise_mode = OPERATION_MODE_DEFAULT;
 
-	if ((assist_level_data.level.flags & ASSIST_FLAG_CRUISE) && throttle_ok())
-	{
-		// pause cruise if brake activated
-		if (brake_is_activated())
-		{
-			cruise_paused = true;
-			cruise_block_throttle_return = true;
+        if (cruise_mode != operation_mode)
+        {
+                cruise_mode = operation_mode;
+                cruise_block_throttle_return = false;
+                cruise_paused = true;
+        }
+
+        if ((assist_level_data.level.flags & ASSIST_FLAG_CRUISE) && throttle_ok())
+        {
+                // pause cruise if brake activated
+                if (brake_is_activated())
+                {
+                        cruise_paused = true;
+                        cruise_block_throttle_return = true;
 		}
 
 		// pause cruise if started pedaling backwards
@@ -537,12 +545,19 @@ bool apply_throttle(uint8_t* target_current, uint8_t throttle_percent)
 
 bool apply_speed_limit(uint8_t* target_current, uint8_t throttle_percent, bool pas_engaged, bool throttle_override)
 {
-	static bool speed_limiting = false;
+        static bool speed_limiting = false;
+        static uint8_t speed_limit_mode = OPERATION_MODE_DEFAULT;
 
-	if (!g_config.use_speed_sensor)
-	{
-		return false;
-	}
+        if (speed_limit_mode != operation_mode)
+        {
+                speed_limit_mode = operation_mode;
+                speed_limiting = false;
+        }
+
+        if (!g_config.use_speed_sensor)
+        {
+                return false;
+        }
 
 	// global throttle speed limit applies if enabled in configuration, PAS is not engaged and throttle is used
 	bool global_throttle_limit_active =
@@ -625,11 +640,18 @@ bool apply_speed_limit(uint8_t* target_current, uint8_t throttle_percent, bool p
 
 bool apply_thermal_limit(uint8_t* target_current)
 {
-	static uint32_t next_log_temp_ms = 10000;
+        static uint32_t next_log_temp_ms = 10000;
 
-	static bool temperature_limiting = false;
+        static bool temperature_limiting = false;
+        static uint8_t thermal_mode = OPERATION_MODE_DEFAULT;
 
-	int16_t temp_contr_x100 = temperature_contr_x100();
+        if (thermal_mode != operation_mode)
+        {
+                thermal_mode = operation_mode;
+                temperature_limiting = false;
+        }
+
+        int16_t temp_contr_x100 = temperature_contr_x100();
 	temperature_contr_c = temp_contr_x100 / 100;
 
 	int16_t temp_motor_x100 = temperature_motor_x100();
@@ -685,11 +707,18 @@ bool apply_thermal_limit(uint8_t* target_current)
 
 bool apply_low_voltage_limit(uint8_t* target_current)
 {
-	static uint32_t next_log_volt_ms = 10000;
-	static bool lvc_limiting = false;
+        static uint32_t next_log_volt_ms = 10000;
+        static bool lvc_limiting = false;
+        static uint8_t lvc_mode = OPERATION_MODE_DEFAULT;
 
-	static uint32_t next_voltage_reading_ms = 125;
-	static int32_t flt_min_bat_volt_x100 = 100 * 100;
+        static uint32_t next_voltage_reading_ms = 125;
+        static int32_t flt_min_bat_volt_x100 = 100 * 100;
+
+        if (lvc_mode != operation_mode)
+        {
+                lvc_mode = operation_mode;
+                lvc_limiting = false;
+        }
 
 	if (system_ms() > next_voltage_reading_ms)
 	{
@@ -745,10 +774,20 @@ bool apply_low_voltage_limit(uint8_t* target_current)
 #if HAS_SHIFT_SENSOR_SUPPORT
 bool apply_shift_sensor_interrupt(uint8_t* target_current)
 {
-	static uint32_t shift_sensor_act_ms = 0;
-	static bool shift_sensor_last = false;
-	static bool shift_sensor_interrupting = false;
-	static bool shift_sensor_logged = false;
+        static uint32_t shift_sensor_act_ms = 0;
+        static bool shift_sensor_last = false;
+        static bool shift_sensor_interrupting = false;
+        static bool shift_sensor_logged = false;
+        static uint8_t shift_mode = OPERATION_MODE_DEFAULT;
+
+        if (shift_mode != operation_mode)
+        {
+                shift_mode = operation_mode;
+                shift_sensor_act_ms = 0;
+                shift_sensor_last = false;
+                shift_sensor_interrupting = false;
+                shift_sensor_logged = false;
+        }
 
 	// Exit immediately if shift interrupts disabled.
 	if (!g_config.use_shift_sensor)
@@ -836,11 +875,19 @@ bool apply_brake(uint8_t* target_current)
 
 void apply_current_ramp_up(uint8_t* target_current, bool enable)
 {
-	static uint8_t ramp_up_target_current = 0;
-	static uint32_t last_ramp_up_increment_ms = 0;
+        static uint8_t ramp_up_target_current = 0;
+        static uint32_t last_ramp_up_increment_ms = 0;
+        static uint8_t ramp_up_mode = OPERATION_MODE_DEFAULT;
 
-	if (enable && *target_current > ramp_up_target_current)
-	{
+        if (ramp_up_mode != operation_mode)
+        {
+                ramp_up_mode = operation_mode;
+                ramp_up_target_current = 0;
+                last_ramp_up_increment_ms = 0;
+        }
+
+        if (enable && *target_current > ramp_up_target_current)
+        {
 		uint32_t now = system_ms();
 		uint16_t time_diff = now - last_ramp_up_increment_ms;
 
@@ -870,12 +917,20 @@ void apply_current_ramp_up(uint8_t* target_current, bool enable)
 
 void apply_current_ramp_down(uint8_t* target_current, bool enable)
 {
-	static uint8_t ramp_down_target_current = 0;
-	static uint32_t last_ramp_down_decrement_ms = 0;
+        static uint8_t ramp_down_target_current = 0;
+        static uint32_t last_ramp_down_decrement_ms = 0;
+        static uint8_t ramp_down_mode = OPERATION_MODE_DEFAULT;
 
-	// apply fast ramp down if coming from high target current (> 50%)
-	if (enable && *target_current < ramp_down_target_current)
-	{
+        if (ramp_down_mode != operation_mode)
+        {
+                ramp_down_mode = operation_mode;
+                ramp_down_target_current = 0;
+                last_ramp_down_decrement_ms = 0;
+        }
+
+        // apply fast ramp down if coming from high target current (> 50%)
+        if (enable && *target_current < ramp_down_target_current)
+        {
 		uint32_t now = system_ms();
 		uint16_t time_diff = now - last_ramp_down_decrement_ms;
 
