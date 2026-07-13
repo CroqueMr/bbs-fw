@@ -4,13 +4,13 @@ on:
     branches:
       - 'research/bsd-m19-m21-v2'
     paths:
-      - 'research/bsd/**'
-      - '.github/workflows/bsd-m19-m20.yml'
-  pull_request:
-    paths:
-      - 'research/bsd/**'
+      - 'research/bsd/m19_scan_p31_targets.sage'
+      - 'research/bsd/m20_p3_positive_support_atlas.sage'
       - '.github/workflows/bsd-m19-m20.yml'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   m19:
@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: research/bsd-m19-m21-v2
       - name: Exact p31 target scan
         run: |
           mkdir -p research/bsd/results && chmod 777 research/bsd/results
@@ -32,11 +34,21 @@ jobs:
           name: m19-p31-target-scan
           path: research/bsd/results/m19_p31_target_scan.*
           if-no-files-found: error
+      - name: Persist exact M19 certificates
+        if: success()
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add research/bsd/results/m19_p31_target_scan.*
+          git commit -m "Persist exact M19 certificates [skip ci]" || exit 0
+          git push origin HEAD:research/bsd-m19-m21-v2
   m20:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: research/bsd-m19-m21-v2
       - name: Exact p3 positive-support atlas
         run: |
           mkdir -p research/bsd/results && chmod 777 research/bsd/results
@@ -51,3 +63,11 @@ jobs:
           name: m20-p3-positive-support-atlas
           path: research/bsd/results/m20_p3_positive_support_atlas.*
           if-no-files-found: error
+      - name: Persist exact M20 certificates
+        if: success()
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add research/bsd/results/m20_p3_positive_support_atlas.*
+          git commit -m "Persist exact M20 certificates [skip ci]" || exit 0
+          git push origin HEAD:research/bsd-m19-m21-v2
