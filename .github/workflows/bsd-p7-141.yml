@@ -1,0 +1,55 @@
+name: BSD p7 141c1 exact campaign
+on:
+  pull_request:
+    paths:
+      - 'research/bsd/**'
+      - '.github/workflows/bsd-p7-141.yml'
+  workflow_dispatch:
+
+jobs:
+  blocks:
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        block: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute exact block
+        shell: bash
+        run: |
+          mkdir -p research/bsd/results
+          chmod 777 research/bsd/results
+          set -o pipefail
+          docker run --rm -v "$PWD:/work" -w /work sagemath/sagemath:latest \
+            sage -python research/bsd/kurihara_141_block.sage "${{ matrix.block }}" --out research/bsd/results \
+            2>&1 | tee "research/bsd/results/141c1_q3461_p7_block_${{ matrix.block }}.log"
+      - name: Upload block
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p7-141-${{ matrix.block }}
+          path: |
+            research/bsd/results/141c1_q3461_p7_block_*.json
+            research/bsd/results/141c1_q3461_p7_block_${{ matrix.block }}.log
+          if-no-files-found: error
+
+  aggregate:
+    needs: blocks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: p7-141-*
+          path: research/bsd/downloaded
+      - name: Strict aggregate
+        run: python research/bsd/aggregate_141.py research/bsd/downloaded research/bsd/aggregates
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p7-141-aggregate
+          path: research/bsd/aggregates/*.json
+          if-no-files-found: error
