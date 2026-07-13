@@ -1,0 +1,46 @@
+name: BSD M19-M20 exact campaigns
+on:
+  pull_request:
+    paths:
+      - 'research/bsd/**'
+      - '.github/workflows/bsd-m19-m20.yml'
+  workflow_dispatch:
+
+jobs:
+  m19:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exact p31 target scan
+        run: |
+          mkdir -p research/bsd/results && chmod 777 research/bsd/results
+          set -o pipefail
+          docker run --rm -v "$PWD:/work" -w /work sagemath/sagemath:latest \
+            sage -python research/bsd/m19_scan_p31_targets.sage \
+            2>&1 | tee research/bsd/results/m19_p31_target_scan.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m19-p31-target-scan
+          path: research/bsd/results/m19_p31_target_scan.*
+          if-no-files-found: error
+  m20:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exact p3 positive-support atlas
+        run: |
+          mkdir -p research/bsd/results && chmod 777 research/bsd/results
+          set -o pipefail
+          docker run --rm -v "$PWD:/work" -w /work sagemath/sagemath:latest bash -lc '
+            sage -pip install --user numba >/tmp/pip-m20.log 2>&1 || true
+            sage -python research/bsd/m20_p3_positive_support_atlas.sage
+          ' 2>&1 | tee research/bsd/results/m20_p3_positive_support_atlas.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m20-p3-positive-support-atlas
+          path: research/bsd/results/m20_p3_positive_support_atlas.*
+          if-no-files-found: error
