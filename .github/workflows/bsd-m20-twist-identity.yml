@@ -1,0 +1,29 @@
+name: BSD M20 twist-symbol identity experiment
+on:
+  pull_request:
+    paths:
+      - 'research/bsd_m20/twist_symbol_identity_experiment.sage'
+      - '.github/workflows/bsd-m20-twist-identity.yml'
+  workflow_dispatch:
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run exact small-q experiment
+        shell: bash
+        run: |
+          mkdir -p research/bsd_m20/results
+          chmod -R 777 research/bsd_m20/results
+          set -o pipefail
+          docker run --rm -v "$PWD:/work" -w /work sagemath/sagemath:latest \
+            sage -python research/bsd_m20/twist_symbol_identity_experiment.sage \
+            2>&1 | tee research/bsd_m20/results/twist_symbol_identity_experiment.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m20-twist-symbol-identity
+          path: research/bsd_m20/results/twist_symbol_identity_experiment.*
+          if-no-files-found: error

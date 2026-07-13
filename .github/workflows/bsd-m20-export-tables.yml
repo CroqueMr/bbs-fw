@@ -1,0 +1,29 @@
+name: BSD M20 export certified Manin tables
+on:
+  pull_request:
+    paths:
+      - 'research/bsd_m20/**'
+      - '.github/workflows/bsd-m20-export-tables.yml'
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export exact tables
+        shell: bash
+        run: |
+          mkdir -p research/bsd_m20/results
+          chmod -R 777 research/bsd_m20/results
+          set -o pipefail
+          docker run --rm -v "$PWD:/work" -w /work sagemath/sagemath:latest \
+            sage -python research/bsd_m20/export_manin_tables.sage \
+            2>&1 | tee research/bsd_m20/results/export.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: m20-certified-manin-tables
+          path: research/bsd_m20/results/*
+          if-no-files-found: error
