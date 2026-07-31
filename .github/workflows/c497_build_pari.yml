@@ -29,18 +29,49 @@ jobs:
           make install
           echo 'print(pari_version()); quit' | "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq
 
-      - name: Retrieve historical qalg libraries
+      - name: Retrieve exact historical qalg pages and attachments
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/apacetti-site"
-          cd "$GITHUB_WORKSPACE/apacetti-site"
-          curl -fL --retry 5 -o toc.html https://sweet.ua.pt/apacetti/toc.html
-          cat toc.html
-          wget --no-verbose --recursive --no-parent --level=3 \
-            --accept='*.gp,*.html,*.gz,*.zip,*.tgz,*.tar' \
-            https://sweet.ua.pt/apacetti/ || true
-          find . -type f -maxdepth 8 -printf '%P\n' | sort
+          ROOT="$GITHUB_WORKSPACE/apacetti-site"
+          mkdir -p "$ROOT/gp"
+          cd "$ROOT/gp"
+          for name in vectors bforms qalg qalgmodforms; do
+            curl -fL --retry 5 -o "$name.html" "https://sweet.ua.pt/apacetti/gp/$name.html"
+          done
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import urljoin
+          import subprocess
+
+          class P(HTMLParser):
+              def __init__(self):
+                  super().__init__(); self.urls=[]
+              def handle_starttag(self, tag, attrs):
+                  for k,v in attrs:
+                      if k.lower() in {'href','src'} and v:
+                          self.urls.append(v)
+
+          base='https://sweet.ua.pt/apacetti/gp/'
+          root=Path('.')
+          urls=set()
+          for page in root.glob('*.html'):
+              p=P(); p.feed(page.read_text(errors='replace'))
+              for u in p.urls:
+                  if u.startswith(('javascript:','mailto:','#')): continue
+                  urls.add(urljoin(base,u))
+          (root/'attachment_urls.txt').write_text('\n'.join(sorted(urls))+'\n')
+          for url in sorted(urls):
+              name=url.rsplit('/',1)[-1].split('?',1)[0] or 'index'
+              if name.lower().endswith(('.gp','.gz','.zip','.tgz','.tar','.txt')):
+                  subprocess.run(['curl','-fL','--retry','5','-o',name,url],check=False)
+          PY
+          echo '--- attachment urls ---'
+          cat attachment_urls.txt
+          echo '--- retrieved files ---'
+          find . -maxdepth 2 -type f -printf '%P %s bytes\n' | sort
+          sha256sum * > SHA256SUMS_SITE.txt
 
       - name: Package binary, PARI source and historical libraries
         shell: bash
