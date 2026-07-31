@@ -1,0 +1,56 @@
+name: C498 LMFDB Inventory
+
+on:
+  push:
+    branches: [c497-pari-builder-20260731]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Query LMFDB APIs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          curl -fL --retry 5 --get 'https://www.lmfdb.org/api/ec_curvedata/' \
+            --data-urlencode '_format=json' \
+            --data-urlencode 'conductor=333839' \
+            -o out/ec_curvedata_333839.json
+          curl -fL --retry 5 --get 'https://www.lmfdb.org/api/mf_newforms/' \
+            --data-urlencode '_format=json' \
+            --data-urlencode 'level=333839' \
+            --data-urlencode 'weight=2' \
+            -o out/mf_newforms_333839_w2.json
+          curl -fL --retry 5 --get 'https://www.lmfdb.org/api/mf_newspaces/' \
+            --data-urlencode '_format=json' \
+            --data-urlencode 'level=333839' \
+            --data-urlencode 'weight=2' \
+            -o out/mf_newspaces_333839_w2.json
+          python - <<'PY'
+          import json, pathlib
+          for p in pathlib.Path('out').glob('*.json'):
+              d=json.load(open(p))
+              print(p, type(d), list(d)[:10] if isinstance(d,dict) else len(d))
+              if isinstance(d,dict):
+                  data=d.get('data', d.get('records', []))
+                  print('records',len(data) if isinstance(data,list) else type(data))
+                  if isinstance(data,list):
+                      for r in data[:20]:
+                          if isinstance(r,dict):
+                              print({k:r.get(k) for k in ('label','lmfdb_label','level','weight','dim','char_degree','hecke_orbit_code','analytic_rank','rank','ainvs','trace_hash') if k in r})
+          PY
+          sha256sum out/*.json > out/SHA256SUMS.txt
+
+      - name: Upload inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: c498-lmfdb-inventory
+          path: out
+          if-no-files-found: error
+          retention-days: 3
