@@ -23,11 +23,12 @@ jobs:
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Freeze schema and all level-333839 weight-2 orbit rows
+      - name: Freeze schema and level-333839 weight-2 rows
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p c499_lmfdb_sql
+
           psql -X -v ON_ERROR_STOP=1 -At -F $'\t' <<'SQL' > c499_lmfdb_sql/server_version.tsv
           select current_database(), current_user, version();
           SQL
@@ -38,6 +39,16 @@ jobs:
           where table_schema='public'
             and table_name in ('mf_newforms','mf_newspaces','mf_hecke_nf','mf_hecke_traces','mf_hecke_charpolys')
           order by table_name, ordinal_position;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/database_coverage.csv
+          select
+            (select count(*) from mf_newforms) as total_newforms,
+            (select coalesce(max(level),0) from mf_newforms) as maximum_level_any_weight,
+            (select count(*) from mf_newforms where weight=2) as total_weight2_newforms,
+            (select coalesce(max(level),0) from mf_newforms where weight=2) as maximum_level_weight2,
+            (select count(*) from mf_newforms where level=333839 and weight=2) as target_orbit_count,
+            (select count(*) from mf_newspaces where level=333839 and weight=2) as target_newspace_count;
           SQL
 
           psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/newforms_level333839_weight2.csv
@@ -57,8 +68,8 @@ jobs:
           psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/orbit_dimension_audit.csv
           select count(*) as orbit_count,
                  coalesce(sum(dim),0) as sum_orbit_dimensions,
-                 min(dim) as min_orbit_dimension,
-                 max(dim) as max_orbit_dimension,
+                 coalesce(min(dim),0) as min_orbit_dimension,
+                 coalesce(max(dim),0) as max_orbit_dimension,
                  count(*) filter (where dim=1) as rational_orbit_count
           from mf_newforms
           where level=333839 and weight=2;
@@ -91,33 +102,49 @@ jobs:
           python3 - <<'PY'
           import csv, hashlib, json, pathlib
           root=pathlib.Path('c499_lmfdb_sql')
-          audit=list(csv.DictReader((root/'orbit_dimension_audit.csv').open()))[0]
-          rows=list(csv.DictReader((root/'newforms_level333839_weight2.csv').open()))
+
+          def first_row(path):
+              rows=list(csv.DictReader(path.open(encoding='utf-8')))
+              return rows[0] if rows else {}
+
+          def integer(value, default=0):
+              try:
+                  return int(value)
+              except (TypeError, ValueError):
+                  return default
+
+          audit=first_row(root/'orbit_dimension_audit.csv')
+          coverage=first_row(root/'database_coverage.csv')
+          rows=list(csv.DictReader((root/'newforms_level333839_weight2.csv').open(encoding='utf-8')))
           summary={
-              'schema':'bsd-c499-lmfdb-sql-inventory-v1',
+              'schema':'bsd-c499-lmfdb-sql-inventory-v2',
               'level':333839,
               'weight':2,
-              'orbit_count':int(audit['orbit_count']),
-              'sum_orbit_dimensions':int(audit['sum_orbit_dimensions']),
-              'min_orbit_dimension':int(audit['min_orbit_dimension']),
-              'max_orbit_dimension':int(audit['max_orbit_dimension']),
-              'rational_orbit_count':int(audit['rational_orbit_count']),
-              'labels':[r['label'] for r in rows],
-              'dimensions':{r['label']:int(r['dim']) for r in rows},
-              'field_polynomials':{r['label']:r.get('field_poly') for r in rows},
-              'self_twist_discs':{r['label']:r.get('self_twist_discs') for r in rows},
+              'orbit_count':integer(audit.get('orbit_count')),
+              'sum_orbit_dimensions':integer(audit.get('sum_orbit_dimensions')),
+              'min_orbit_dimension':integer(audit.get('min_orbit_dimension')),
+              'max_orbit_dimension':integer(audit.get('max_orbit_dimension')),
+              'rational_orbit_count':integer(audit.get('rational_orbit_count')),
+              'labels':[r.get('label','') for r in rows if r.get('label')],
+              'dimensions':{r['label']:integer(r.get('dim')) for r in rows if r.get('label')},
+              'field_polynomials':{r['label']:r.get('field_poly') for r in rows if r.get('label')},
+              'self_twist_discs':{r['label']:r.get('self_twist_discs') for r in rows if r.get('label')},
               'newspace_dimension_reference':23980,
+              'database_coverage':{k:integer(v) for k,v in coverage.items()},
           }
           summary['dimension_sum_matches_reference']=(summary['sum_orbit_dimensions']==23980)
+          summary['target_present_in_mirror']=(summary['orbit_count']>0 or summary['database_coverage'].get('target_newspace_count',0)>0)
           (root/'SUMMARY.json').write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n',encoding='utf-8',newline='\n')
           lines=['# C499 LMFDB SQL inventory','',
-                 f"- orbit count: {summary['orbit_count']}",
-                 f"- sum of orbit dimensions: {summary['sum_orbit_dimensions']}",
+                 f"- target orbit rows: {summary['orbit_count']}",
+                 f"- target newspace rows: {summary['database_coverage'].get('target_newspace_count',0)}",
+                 f"- target present in mirror: {summary['target_present_in_mirror']}",
+                 f"- sum of target orbit dimensions: {summary['sum_orbit_dimensions']}",
                  f"- independent newspace dimension: {summary['newspace_dimension_reference']}",
                  f"- dimension sum matches: {summary['dimension_sum_matches_reference']}",
-                 f"- rational orbit count: {summary['rational_orbit_count']}",
-                 f"- dimension range: {summary['min_orbit_dimension']}..{summary['max_orbit_dimension']}",'',
-                 'The equality of dimension sums audits completeness at this level relative to the independently certified newspace dimension.']
+                 f"- mirror max level in weight 2: {summary['database_coverage'].get('maximum_level_weight2',0)}",
+                 f"- total weight-2 orbit rows: {summary['database_coverage'].get('total_weight2_newforms',0)}",'',
+                 'A zero target count proves only absence from this mirror snapshot, not absence of mathematical orbits.']
           (root/'SUMMARY.md').write_text('\n'.join(lines)+'\n',encoding='utf-8',newline='\n')
           paths=sorted(p for p in root.iterdir() if p.is_file() and p.name!='SHA256SUMS.txt')
           with (root/'SHA256SUMS.txt').open('w',encoding='utf-8',newline='\n') as fh:
@@ -130,6 +157,7 @@ jobs:
           du -h c499_lmfdb_sql/*
 
       - name: Upload C499 SQL inventory
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: c499-lmfdb-sql-inventory
