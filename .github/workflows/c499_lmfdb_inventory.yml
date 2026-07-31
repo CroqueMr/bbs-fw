@@ -3,6 +3,8 @@ name: C499 LMFDB Inventory
 on:
   push:
     branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
@@ -20,10 +22,8 @@ jobs:
           cat > c499_lmfdb/query_lmfdb.py <<'PY'
           import hashlib
           import json
-          import os
           import pathlib
           import time
-          import urllib.error
           import urllib.parse
           import urllib.request
 
@@ -78,13 +78,7 @@ jobs:
                   if not isinstance(data, list):
                       raise RuntimeError(f'non-list data in {url}')
                   rows.extend(data)
-                  pages.append({
-                      'url': url,
-                      'raw_path': raw_path,
-                      'row_count': len(data),
-                      'content_type': ctype,
-                      'keys': sorted(payload.keys()) if isinstance(payload, dict) else [],
-                  })
+                  pages.append({'url': url, 'raw_path': raw_path, 'row_count': len(data), 'content_type': ctype, 'keys': sorted(payload.keys()) if isinstance(payload, dict) else []})
                   nxt = payload.get('next') if isinstance(payload, dict) else None
                   if nxt in (None, '', False):
                       break
@@ -120,15 +114,13 @@ jobs:
           for idx, row in enumerate(newforms):
               label = str(row.get('label') or f'row_{idx}')
               code = row.get('hecke_orbit_code')
-              key = label
               entry = {'label': label, 'hecke_orbit_code': code, 'queries': {}}
-              inventory['per_orbit'][key] = entry
+              inventory['per_orbit'][label] = entry
               selectors = []
               if code is not None:
                   selectors.append(('hecke_orbit_code', 'i' + str(code)))
               selectors.append(('label', 's' + label))
               for coll in ['mf_hecke_nf', 'mf_hecke_traces', 'mf_hecke_charpolys']:
-                  success = False
                   local_errors = []
                   for field, value in selectors:
                       params = {field: value, '_format': 'json'}
@@ -136,15 +128,13 @@ jobs:
                       try:
                           result = fetch_all(coll, params, stem)
                           entry['queries'][coll] = result
-                          success = True
                           if result['rows']:
                               break
                       except Exception as exc:
                           local_errors.append({'field': field, 'value': value, 'error': repr(exc)})
-                  if not success:
+                  if coll not in entry['queries']:
                       errors.append({'collection': coll, 'label': label, 'errors': local_errors})
 
-          # Also freeze API landing metadata for provenance.
           try:
               payload, body, ctype = get_json('https://www.lmfdb.org/api/')
               (RAW / 'api_landing.json').write_bytes(body if body.endswith(b'\n') else body + b'\n')
@@ -161,24 +151,20 @@ jobs:
               'error_count': len(errors),
           }
           (ROOT / 'inventory.json').write_bytes(canonical(inventory))
-
           lines = [
               '# C499 LMFDB inventory', '',
               f"- newform rows: {inventory['summary']['newform_rows']}",
               f"- labels: {', '.join(labels) if labels else '(none)'}",
               f"- newspace rows: {inventory['summary']['newspace_rows']}",
               f"- elliptic curve rows: {inventory['summary']['elliptic_curve_rows']}",
-              f"- API errors: {inventory['summary']['error_count']}",
-              '',
+              f"- API errors: {inventory['summary']['error_count']}", '',
               'This is a frozen API inventory, not by itself a proof of database completeness.',
           ]
           (ROOT / 'SUMMARY.md').write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
-
           paths = sorted(p for p in ROOT.rglob('*') if p.is_file() and p.name != 'SHA256SUMS.txt')
           with (ROOT / 'SHA256SUMS.txt').open('w', encoding='utf-8', newline='\n') as fh:
               for p in paths:
                   fh.write(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(ROOT).as_posix() + '\n')
-
           print(json.dumps(inventory['summary'], sort_keys=True))
           PY
           python3 c499_lmfdb/query_lmfdb.py
