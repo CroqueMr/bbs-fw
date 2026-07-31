@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential curl ca-certificates libgmp-dev libreadline-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential curl wget ca-certificates libgmp-dev libreadline-dev
 
       - name: Build PARI-GP 2.17.4
         shell: bash
@@ -29,11 +29,24 @@ jobs:
           make install
           echo 'print(pari_version()); quit' | "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq
 
-      - name: Package binary and source scripts
+      - name: Retrieve historical qalg libraries
         shell: bash
         run: |
           set -euxo pipefail
-          tar -C "$GITHUB_WORKSPACE" -czf c497-pari-linux-x86_64.tar.gz pari-install pari-2.17.4
+          mkdir -p "$GITHUB_WORKSPACE/apacetti-site"
+          cd "$GITHUB_WORKSPACE/apacetti-site"
+          curl -fL --retry 5 -o toc.html https://sweet.ua.pt/apacetti/toc.html
+          cat toc.html
+          wget --no-verbose --recursive --no-parent --level=3 \
+            --accept='*.gp,*.html,*.gz,*.zip,*.tgz,*.tar' \
+            https://sweet.ua.pt/apacetti/ || true
+          find . -type f -maxdepth 8 -printf '%P\n' | sort
+
+      - name: Package binary, PARI source and historical libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -C "$GITHUB_WORKSPACE" -czf c497-pari-linux-x86_64.tar.gz pari-install pari-2.17.4 apacetti-site
           sha256sum c497-pari-linux-x86_64.tar.gz > c497-pari-linux-x86_64.tar.gz.sha256
 
       - name: Upload artifact
