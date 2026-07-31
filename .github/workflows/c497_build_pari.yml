@@ -67,11 +67,41 @@ jobs:
               if name.lower().endswith(('.gp','.gz','.zip','.tgz','.tar','.txt')):
                   subprocess.run(['curl','-fL','--retry','5','-o',name,url],check=False)
           PY
-          echo '--- attachment urls ---'
-          cat attachment_urls.txt
-          echo '--- retrieved files ---'
-          find . -maxdepth 2 -type f -printf '%P %s bytes\n' | sort
           sha256sum * > SHA256SUMS_SITE.txt
+
+      - name: Query LMFDB level 333839 inventory
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/lmfdb-inventory"
+          cd "$GITHUB_WORKSPACE/lmfdb-inventory"
+          curl -fL --retry 5 --get 'https://www.lmfdb.org/api/ec_curvedata/' \
+            --data-urlencode '_format=json' \
+            --data-urlencode 'conductor=333839' \
+            -o ec_curvedata_333839.json
+          curl -fL --retry 5 --get 'https://www.lmfdb.org/api/mf_newforms/' \
+            --data-urlencode '_format=json' \
+            --data-urlencode 'level=333839' \
+            --data-urlencode 'weight=2' \
+            -o mf_newforms_333839_w2.json
+          curl -fL --retry 5 --get 'https://www.lmfdb.org/api/mf_newspaces/' \
+            --data-urlencode '_format=json' \
+            --data-urlencode 'level=333839' \
+            --data-urlencode 'weight=2' \
+            -o mf_newspaces_333839_w2.json
+          python3 - <<'PY'
+          import json, pathlib
+          summary={}
+          for p in pathlib.Path('.').glob('*.json'):
+              d=json.load(open(p))
+              data=d.get('data', d.get('records', [])) if isinstance(d,dict) else []
+              summary[p.name]={'record_count':len(data) if isinstance(data,list) else None}
+              if isinstance(data,list):
+                  summary[p.name]['records']=[{k:r.get(k) for k in ('label','lmfdb_label','level','weight','dim','char_degree','hecke_orbit_code','analytic_rank','rank','ainvs','trace_hash','is_self_twist') if k in r} for r in data]
+          pathlib.Path('summary.json').write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n')
+          print(json.dumps(summary,sort_keys=True,indent=2))
+          PY
+          sha256sum *.json > SHA256SUMS.txt
 
       - name: Package binary, PARI source and historical libraries
         shell: bash
@@ -80,12 +110,20 @@ jobs:
           tar -C "$GITHUB_WORKSPACE" -czf c497-pari-linux-x86_64.tar.gz pari-install pari-2.17.4 apacetti-site
           sha256sum c497-pari-linux-x86_64.tar.gz > c497-pari-linux-x86_64.tar.gz.sha256
 
-      - name: Upload artifact
+      - name: Upload PARI artifact
         uses: actions/upload-artifact@v4
         with:
           name: c497-pari-linux-x86_64
           path: |
             c497-pari-linux-x86_64.tar.gz
             c497-pari-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload LMFDB inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: c498-lmfdb-inventory
+          path: lmfdb-inventory
           if-no-files-found: error
           retention-days: 3
