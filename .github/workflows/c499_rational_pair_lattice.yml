@@ -1,0 +1,106 @@
+name: C499 Rational Pair Canonical Lattice
+
+on:
+  push:
+    branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  rational-pair-lattice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential curl ca-certificates libgmp-dev libreadline-dev
+
+      - name: Build PARI-GP 2.17.4
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 -o pari.tar.gz https://pari.math.u-bordeaux.fr/pub/pari/unix/pari-2.17.4.tar.gz
+          tar -xzf pari.tar.gz
+          cd pari-2.17.4
+          ./Configure --prefix="$GITHUB_WORKSPACE/pari-install"
+          make -j2 gp
+          make install
+
+      - name: Compute b full symbol and release its modular space
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p c499_pair
+          cat > compute_b.gp <<'GP'
+          default(parisizemax,7000000000);
+          default(parisize,1000000000);
+          Eb=ellinit([0,-1,1,-47095957,124416608755]);
+          Rb=msfromell(Eb,0);
+          vb=Rb[2];
+          if(type(vb)!="t_VEC" || #vb!=3,error("unexpected b full output"));
+          writebin("c499_pair/b_full_vectors.gpbin",vb);
+          write("c499_pair/b_full_vectors.txt",Str(vb));
+          quit
+          GP
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
+          /usr/bin/time -v "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq compute_b.gp > c499_pair/b_stdout.log 2> c499_pair/b_resource.log
+
+      - name: Compute a space, common saturations, pairings and Hecke actions
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat > compute_pair.gp <<'GP'
+          default(parisizemax,7000000000);
+          default(parisize,1000000000);
+          Ea=ellinit([0,-1,1,-5698610837,-165575711809938]);
+          Ra=msfromell(Ea,0);
+          M=Ra[1]; va=Ra[2]; vb=read("c499_pair/b_full_vectors.gpbin");
+          ap=va[1]; am=va[2]; La=va[3];
+          bp=vb[1]; bm=vb[2]; Lb=vb[3];
+          if(!msissymbol(M,ap)||!msissymbol(M,am)||!msissymbol(M,bp)||!msissymbol(M,bm),error("basis mismatch"));
+          if(mshecke(M,13)*bp != ellap(ellinit([0,-1,1,-47095957,124416608755]),13)*bp,error("b vector not in same canonical M"));
+          Pplus=matconcat([ap,bp]); Pminus=matconcat([am,bm]); Pcurve=matconcat([La,Lb]);
+          Lplus=mslattice(M,Pplus); Lminus=mslattice(M,Pminus); Lpair=mslattice(M,Pcurve);
+          Xplus=matinverseimage(Pplus,Lplus); Xminus=matinverseimage(Pminus,Lminus); Xpair=matinverseimage(Pcurve,Lpair);
+          if(Pplus*Xplus!=Lplus||Pminus*Xminus!=Lminus||Pcurve*Xpair!=Lpair,error("inverse image failure"));
+          index_plus=1/abs(det(Xplus)); index_minus=1/abs(det(Xminus)); index_pair=1/abs(det(Xpair));
+          Gpair=mspetersson(M,Lpair); Ga=mspetersson(M,La); Gb=mspetersson(M,Lb);
+          H13plus=mshecke(M,13,Lplus); H17plus=mshecke(M,17,Lplus); H19plus=mshecke(M,19,Lplus);
+          H13minus=mshecke(M,13,Lminus); H17minus=mshecke(M,17,Lminus); H19minus=mshecke(M,19,Lminus);
+          writebin("c499_pair/a_full_vectors.gpbin",va);
+          writebin("c499_pair/Lplus.gpbin",Lplus); writebin("c499_pair/Lminus.gpbin",Lminus); writebin("c499_pair/Lpair.gpbin",Lpair);
+          writebin("c499_pair/Xplus.gpbin",Xplus); writebin("c499_pair/Xminus.gpbin",Xminus); writebin("c499_pair/Xpair.gpbin",Xpair);
+          writebin("c499_pair/Gpair.gpbin",Gpair);
+          write("c499_pair/invariants.gp",Str("dim_M=",matsize(mshecke(M,2))[1]));
+          write("c499_pair/invariants.gp",Str("index_plus=",index_plus));
+          write("c499_pair/invariants.gp",Str("index_minus=",index_minus));
+          write("c499_pair/invariants.gp",Str("index_pair=",index_pair));
+          write("c499_pair/invariants.gp",Str("Xplus=",Xplus));
+          write("c499_pair/invariants.gp",Str("Xminus=",Xminus));
+          write("c499_pair/invariants.gp",Str("Xpair=",Xpair));
+          write("c499_pair/invariants.gp",Str("Ga=",Ga));
+          write("c499_pair/invariants.gp",Str("Gb=",Gb));
+          write("c499_pair/invariants.gp",Str("Gpair=",Gpair));
+          write("c499_pair/invariants.gp",Str("H13plus=",H13plus));
+          write("c499_pair/invariants.gp",Str("H17plus=",H17plus));
+          write("c499_pair/invariants.gp",Str("H19plus=",H19plus));
+          write("c499_pair/invariants.gp",Str("H13minus=",H13minus));
+          write("c499_pair/invariants.gp",Str("H17minus=",H17minus));
+          write("c499_pair/invariants.gp",Str("H19minus=",H19minus));
+          quit
+          GP
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
+          /usr/bin/time -v "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq compute_pair.gp > c499_pair/pair_stdout.log 2> c499_pair/pair_resource.log
+          sha256sum c499_pair/* > c499_pair/SHA256SUMS.txt
+          cat c499_pair/invariants.gp
+          grep -E 'Elapsed|Maximum resident|Exit status' c499_pair/*_resource.log
+
+      - name: Upload canonical rational pair lattice
+        uses: actions/upload-artifact@v4
+        with:
+          name: c499-rational-pair-lattice
+          path: c499_pair
+          if-no-files-found: error
+          retention-days: 3
