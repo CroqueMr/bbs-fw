@@ -1,4 +1,4 @@
-name: C499 LMFDB Inventory
+name: C499 LMFDB SQL Inventory
 
 on:
   push:
@@ -13,168 +13,126 @@ jobs:
   inventory:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      PGHOST: devmirror.lmfdb.xyz
+      PGPORT: '5432'
+      PGDATABASE: lmfdb
+      PGUSER: lmfdb
+      PGPASSWORD: lmfdb
     steps:
-      - name: Query LMFDB API and freeze raw responses
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Freeze schema and all level-333839 weight-2 orbit rows
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p c499_lmfdb/raw
-          cat > c499_lmfdb/query_lmfdb.py <<'PY'
-          import hashlib
-          import json
-          import pathlib
-          import time
-          import urllib.parse
-          import urllib.request
+          mkdir -p c499_lmfdb_sql
+          psql -X -v ON_ERROR_STOP=1 -At -F $'\t' <<'SQL' > c499_lmfdb_sql/server_version.tsv
+          select current_database(), current_user, version();
+          SQL
 
-          ROOT = pathlib.Path('c499_lmfdb')
-          RAW = ROOT / 'raw'
-          BASE = 'https://www.lmfdb.org/api/'
-          HEADERS = {
-              'User-Agent': 'BSD-C499-reproducible-inventory/1.0',
-              'Accept': 'application/json',
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/schema_columns.csv
+          select table_name, ordinal_position, column_name, data_type, udt_name
+          from information_schema.columns
+          where table_schema='public'
+            and table_name in ('mf_newforms','mf_newspaces','mf_hecke_nf','mf_hecke_traces','mf_hecke_charpolys')
+          order by table_name, ordinal_position;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/newforms_level333839_weight2.csv
+          select *
+          from mf_newforms
+          where level=333839 and weight=2
+          order by label;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/newspaces_level333839_weight2.csv
+          select *
+          from mf_newspaces
+          where level=333839 and weight=2
+          order by label;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/orbit_dimension_audit.csv
+          select count(*) as orbit_count,
+                 coalesce(sum(dim),0) as sum_orbit_dimensions,
+                 min(dim) as min_orbit_dimension,
+                 max(dim) as max_orbit_dimension,
+                 count(*) filter (where dim=1) as rational_orbit_count
+          from mf_newforms
+          where level=333839 and weight=2;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/hecke_nf_selected_level.csv
+          select h.*
+          from mf_hecke_nf h
+          join mf_newforms f using (hecke_orbit_code)
+          where f.level=333839 and f.weight=2
+          order by f.label;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/hecke_traces_selected_level.csv
+          select h.*
+          from mf_hecke_traces h
+          join mf_newforms f using (hecke_orbit_code)
+          where f.level=333839 and f.weight=2
+          order by f.label;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/hecke_charpolys_selected_level.csv
+          select h.*
+          from mf_hecke_charpolys h
+          join mf_newforms f using (hecke_orbit_code)
+          where f.level=333839 and f.weight=2
+          order by f.label;
+          SQL
+
+          python3 - <<'PY'
+          import csv, hashlib, json, pathlib
+          root=pathlib.Path('c499_lmfdb_sql')
+          audit=list(csv.DictReader((root/'orbit_dimension_audit.csv').open()))[0]
+          rows=list(csv.DictReader((root/'newforms_level333839_weight2.csv').open()))
+          summary={
+              'schema':'bsd-c499-lmfdb-sql-inventory-v1',
+              'level':333839,
+              'weight':2,
+              'orbit_count':int(audit['orbit_count']),
+              'sum_orbit_dimensions':int(audit['sum_orbit_dimensions']),
+              'min_orbit_dimension':int(audit['min_orbit_dimension']),
+              'max_orbit_dimension':int(audit['max_orbit_dimension']),
+              'rational_orbit_count':int(audit['rational_orbit_count']),
+              'labels':[r['label'] for r in rows],
+              'dimensions':{r['label']:int(r['dim']) for r in rows},
+              'field_polynomials':{r['label']:r.get('field_poly') for r in rows},
+              'self_twist_discs':{r['label']:r.get('self_twist_discs') for r in rows},
+              'newspace_dimension_reference':23980,
           }
-
-          def get_json(url, attempts=7):
-              last = None
-              for attempt in range(attempts):
-                  try:
-                      req = urllib.request.Request(url, headers=HEADERS)
-                      with urllib.request.urlopen(req, timeout=90) as resp:
-                          body = resp.read()
-                          status = resp.status
-                          ctype = resp.headers.get('content-type', '')
-                      if status != 200:
-                          raise RuntimeError(f'HTTP {status}')
-                      return json.loads(body.decode('utf-8')), body, ctype
-                  except Exception as exc:
-                      last = exc
-                      time.sleep(min(2 ** attempt, 20))
-              raise RuntimeError(f'failed after {attempts} attempts: {url}: {last}')
-
-          def canonical(obj):
-              return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8') + b'\n'
-
-          def save_raw(stem, page_no, body):
-              p = RAW / f'{stem}_page_{page_no:03d}.json'
-              p.write_bytes(body if body.endswith(b'\n') else body + b'\n')
-              return str(p)
-
-          def fetch_all(collection, params, stem):
-              query = urllib.parse.urlencode(params)
-              url = urllib.parse.urljoin(BASE, collection + '/') + '?' + query
-              rows = []
-              pages = []
-              seen = set()
-              page_no = 0
-              while url:
-                  if url in seen:
-                      raise RuntimeError(f'pagination loop: {url}')
-                  seen.add(url)
-                  page_no += 1
-                  payload, body, ctype = get_json(url)
-                  raw_path = save_raw(stem, page_no, body)
-                  data = payload.get('data', []) if isinstance(payload, dict) else []
-                  if not isinstance(data, list):
-                      raise RuntimeError(f'non-list data in {url}')
-                  rows.extend(data)
-                  pages.append({'url': url, 'raw_path': raw_path, 'row_count': len(data), 'content_type': ctype, 'keys': sorted(payload.keys()) if isinstance(payload, dict) else []})
-                  nxt = payload.get('next') if isinstance(payload, dict) else None
-                  if nxt in (None, '', False):
-                      break
-                  url = urllib.parse.urljoin(url, nxt)
-              return {'collection': collection, 'params': params, 'pages': pages, 'rows': rows}
-
-          errors = []
-          inventory = {
-              'schema': 'bsd-c499-lmfdb-inventory-v1',
-              'query_level': 333839,
-              'query_weight': 2,
-              'base_url': BASE,
-              'collections': {},
-              'per_orbit': {},
-              'errors': errors,
-          }
-
-          core_queries = {
-              'mf_newforms': {'level': 'i333839', 'weight': 'i2', '_format': 'json'},
-              'mf_newspaces': {'level': 'i333839', 'weight': 'i2', '_format': 'json'},
-              'ec_curvedata': {'conductor': 'i333839', '_format': 'json'},
-          }
-          for coll, params in core_queries.items():
-              try:
-                  inventory['collections'][coll] = fetch_all(coll, params, coll)
-              except Exception as exc:
-                  errors.append({'collection': coll, 'params': params, 'error': repr(exc)})
-
-          newforms = inventory['collections'].get('mf_newforms', {}).get('rows', [])
-          labels = sorted({str(r.get('label')) for r in newforms if r.get('label')})
-          orbit_codes = sorted({str(r.get('hecke_orbit_code')) for r in newforms if r.get('hecke_orbit_code') is not None})
-
-          for idx, row in enumerate(newforms):
-              label = str(row.get('label') or f'row_{idx}')
-              code = row.get('hecke_orbit_code')
-              entry = {'label': label, 'hecke_orbit_code': code, 'queries': {}}
-              inventory['per_orbit'][label] = entry
-              selectors = []
-              if code is not None:
-                  selectors.append(('hecke_orbit_code', 'i' + str(code)))
-              selectors.append(('label', 's' + label))
-              for coll in ['mf_hecke_nf', 'mf_hecke_traces', 'mf_hecke_charpolys']:
-                  local_errors = []
-                  for field, value in selectors:
-                      params = {field: value, '_format': 'json'}
-                      stem = f'{coll}_{label.replace(".", "_")}_{field}'
-                      try:
-                          result = fetch_all(coll, params, stem)
-                          entry['queries'][coll] = result
-                          if result['rows']:
-                              break
-                      except Exception as exc:
-                          local_errors.append({'field': field, 'value': value, 'error': repr(exc)})
-                  if coll not in entry['queries']:
-                      errors.append({'collection': coll, 'label': label, 'errors': local_errors})
-
-          try:
-              payload, body, ctype = get_json('https://www.lmfdb.org/api/')
-              (RAW / 'api_landing.json').write_bytes(body if body.endswith(b'\n') else body + b'\n')
-              inventory['api_landing_keys'] = sorted(payload.keys()) if isinstance(payload, dict) else []
-          except Exception as exc:
-              errors.append({'collection': 'api_landing', 'error': repr(exc)})
-
-          inventory['summary'] = {
-              'newform_rows': len(newforms),
-              'newform_labels': labels,
-              'hecke_orbit_codes': orbit_codes,
-              'newspace_rows': len(inventory['collections'].get('mf_newspaces', {}).get('rows', [])),
-              'elliptic_curve_rows': len(inventory['collections'].get('ec_curvedata', {}).get('rows', [])),
-              'error_count': len(errors),
-          }
-          (ROOT / 'inventory.json').write_bytes(canonical(inventory))
-          lines = [
-              '# C499 LMFDB inventory', '',
-              f"- newform rows: {inventory['summary']['newform_rows']}",
-              f"- labels: {', '.join(labels) if labels else '(none)'}",
-              f"- newspace rows: {inventory['summary']['newspace_rows']}",
-              f"- elliptic curve rows: {inventory['summary']['elliptic_curve_rows']}",
-              f"- API errors: {inventory['summary']['error_count']}", '',
-              'This is a frozen API inventory, not by itself a proof of database completeness.',
-          ]
-          (ROOT / 'SUMMARY.md').write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
-          paths = sorted(p for p in ROOT.rglob('*') if p.is_file() and p.name != 'SHA256SUMS.txt')
-          with (ROOT / 'SHA256SUMS.txt').open('w', encoding='utf-8', newline='\n') as fh:
+          summary['dimension_sum_matches_reference']=(summary['sum_orbit_dimensions']==23980)
+          (root/'SUMMARY.json').write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n',encoding='utf-8',newline='\n')
+          lines=['# C499 LMFDB SQL inventory','',
+                 f"- orbit count: {summary['orbit_count']}",
+                 f"- sum of orbit dimensions: {summary['sum_orbit_dimensions']}",
+                 f"- independent newspace dimension: {summary['newspace_dimension_reference']}",
+                 f"- dimension sum matches: {summary['dimension_sum_matches_reference']}",
+                 f"- rational orbit count: {summary['rational_orbit_count']}",
+                 f"- dimension range: {summary['min_orbit_dimension']}..{summary['max_orbit_dimension']}",'',
+                 'The equality of dimension sums audits completeness at this level relative to the independently certified newspace dimension.']
+          (root/'SUMMARY.md').write_text('\n'.join(lines)+'\n',encoding='utf-8',newline='\n')
+          paths=sorted(p for p in root.iterdir() if p.is_file() and p.name!='SHA256SUMS.txt')
+          with (root/'SHA256SUMS.txt').open('w',encoding='utf-8',newline='\n') as fh:
               for p in paths:
-                  fh.write(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(ROOT).as_posix() + '\n')
-          print(json.dumps(inventory['summary'], sort_keys=True))
+                  fh.write(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n')
+          print(json.dumps(summary,sort_keys=True))
           PY
-          python3 c499_lmfdb/query_lmfdb.py
-          cat c499_lmfdb/SUMMARY.md
-          cat c499_lmfdb/SHA256SUMS.txt
 
-      - name: Upload C499 inventory
+          cat c499_lmfdb_sql/SUMMARY.md
+          du -h c499_lmfdb_sql/*
+
+      - name: Upload C499 SQL inventory
         uses: actions/upload-artifact@v4
         with:
-          name: c499-lmfdb-inventory
-          path: c499_lmfdb
+          name: c499-lmfdb-sql-inventory
+          path: c499_lmfdb_sql
           if-no-files-found: error
           retention-days: 3
