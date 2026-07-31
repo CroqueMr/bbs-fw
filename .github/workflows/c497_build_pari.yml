@@ -1,0 +1,47 @@
+name: C497 Build PARI-GP
+
+on:
+  push:
+    branches: [c497-pari-builder-20260731]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build-pari:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential curl ca-certificates libgmp-dev libreadline-dev
+
+      - name: Build PARI-GP 2.17.4
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 -o pari.tar.gz https://pari.math.u-bordeaux.fr/pub/pari/unix/pari-2.17.4.tar.gz
+          tar -xzf pari.tar.gz
+          cd pari-2.17.4
+          ./Configure --prefix="$GITHUB_WORKSPACE/pari-install"
+          make -j2 gp
+          make install
+          echo 'print(pari_version()); quit' | "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq
+
+      - name: Package binary
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -C "$GITHUB_WORKSPACE" -czf c497-pari-linux-x86_64.tar.gz pari-install
+          sha256sum c497-pari-linux-x86_64.tar.gz > c497-pari-linux-x86_64.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: c497-pari-linux-x86_64
+          path: |
+            c497-pari-linux-x86_64.tar.gz
+            c497-pari-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 3
