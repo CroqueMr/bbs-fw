@@ -1,0 +1,97 @@
+name: C499 PARI Modular Symbols
+
+on:
+  push:
+    branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  modular-symbol:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - curve: a
+            sign_name: plus
+            sign: 1
+            ainvs: '[0,-1,1,-5698610837,-165575711809938]'
+          - curve: a
+            sign_name: minus
+            sign: -1
+            ainvs: '[0,-1,1,-5698610837,-165575711809938]'
+          - curve: b
+            sign_name: plus
+            sign: 1
+            ainvs: '[0,-1,1,-47095957,124416608755]'
+          - curve: b
+            sign_name: minus
+            sign: -1
+            ainvs: '[0,-1,1,-47095957,124416608755]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential curl ca-certificates libgmp-dev libreadline-dev
+
+      - name: Build PARI-GP 2.17.4
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 -o pari.tar.gz https://pari.math.u-bordeaux.fr/pub/pari/unix/pari-2.17.4.tar.gz
+          tar -xzf pari.tar.gz
+          cd pari-2.17.4
+          ./Configure --prefix="$GITHUB_WORKSPACE/pari-install"
+          make -j2 gp
+          make install
+
+      - name: Compute canonical Neron-normalized modular symbol
+        shell: bash
+        env:
+          CURVE: ${{ matrix.curve }}
+          SIGN_NAME: ${{ matrix.sign_name }}
+          SIGN: ${{ matrix.sign }}
+          AINVS: ${{ matrix.ainvs }}
+        run: |
+          set -euxo pipefail
+          mkdir -p "out_${CURVE}_${SIGN_NAME}"
+          cat > compute.gp <<GP
+          default(parisizemax,7000000000);
+          default(parisize,1000000000);
+          E=ellinit(${AINVS});
+          t0=getwalltime();
+          R=msfromell(E,${SIGN});
+          x=R[2];
+          D=denominator(x);
+          y=D*x;
+          C=content(y);
+          z=y/C;
+          writebin("out_${CURVE}_${SIGN_NAME}/x.gpbin",x);
+          writebin("out_${CURVE}_${SIGN_NAME}/primitive_integral.gpbin",z);
+          write("out_${CURVE}_${SIGN_NAME}/x.txt",x);
+          write("out_${CURVE}_${SIGN_NAME}/primitive_integral.txt",z);
+          write("out_${CURVE}_${SIGN_NAME}/metadata.gp","curve=${CURVE}");
+          write("out_${CURVE}_${SIGN_NAME}/metadata.gp","sign=${SIGN}");
+          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("length=",#x));
+          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("denominator=",D));
+          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("integral_content=",C));
+          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("elapsed_ms=",getwalltime()-t0));
+          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("level=",msgetlevel(R[1])));
+          quit
+          GP
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
+          /usr/bin/time -v "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq compute.gp > "out_${CURVE}_${SIGN_NAME}/stdout.log" 2> "out_${CURVE}_${SIGN_NAME}/resource.log"
+          sha256sum "out_${CURVE}_${SIGN_NAME}"/* > "out_${CURVE}_${SIGN_NAME}/SHA256SUMS.txt"
+          cat "out_${CURVE}_${SIGN_NAME}/metadata.gp"
+          cat "out_${CURVE}_${SIGN_NAME}/resource.log"
+
+      - name: Upload modular symbol
+        uses: actions/upload-artifact@v4
+        with:
+          name: c499-msfromell-${{ matrix.curve }}-${{ matrix.sign_name }}
+          path: out_${{ matrix.curve }}_${{ matrix.sign_name }}
+          if-no-files-found: error
+          retention-days: 3
