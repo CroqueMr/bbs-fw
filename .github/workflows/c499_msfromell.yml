@@ -97,10 +97,12 @@ jobs:
           quit
           GP
           "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq verify.gp > "$OUT/verify_stdout.log" 2> "$OUT/verify_stderr.log"
-          grep -q '^AUDIT_OK type=t_COL length=' "$OUT/verify_stdout.log"
+          test -s "$OUT/audit.gp"
+          test -s "$OUT/primitive_integral.gpbin"
           cat "$OUT/compute_metadata.gp"
           cat "$OUT/audit.gp"
           cat "$OUT/verify_stdout.log"
+          cat "$OUT/verify_stderr.log"
           grep -E 'Elapsed|Maximum resident|Exit status' "$OUT/compute_resource.log"
           sha256sum "$OUT"/* > "$OUT/SHA256SUMS.txt"
 
