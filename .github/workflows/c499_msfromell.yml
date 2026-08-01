@@ -3,6 +3,8 @@ name: C500 PARI Modular Symbols Verified
 on:
   push:
     branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
