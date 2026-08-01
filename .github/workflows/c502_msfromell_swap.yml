@@ -1,0 +1,133 @@
+name: C502 PARI Modular Symbols Swap
+
+on:
+  push:
+    branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  modular-symbol:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - curve: a
+            sign_name: plus
+            sign: 1
+            ainvs: '[0,-1,1,-5698610837,-165575711809938]'
+          - curve: a
+            sign_name: minus
+            sign: -1
+            ainvs: '[0,-1,1,-5698610837,-165575711809938]'
+          - curve: b
+            sign_name: plus
+            sign: 1
+            ainvs: '[0,-1,1,-47095957,124416608755]'
+          - curve: b
+            sign_name: minus
+            sign: -1
+            ainvs: '[0,-1,1,-47095957,124416608755]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Configure 48GB swap
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 48G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Build PARI-GP 2.17.4
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl ca-certificates libgmp-dev libreadline-dev
+          curl -fL --retry 5 -o pari.tar.gz https://pari.math.u-bordeaux.fr/pub/pari/unix/pari-2.17.4.tar.gz
+          tar -xzf pari.tar.gz
+          cd pari-2.17.4
+          ./Configure --prefix="$GITHUB_WORKSPACE/pari-install"
+          make -j2 gp
+          make install
+          echo 'print(version());quit' | "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq
+
+      - name: Compute and verify signed modular symbol
+        shell: bash
+        env:
+          CURVE: ${{ matrix.curve }}
+          SIGN_NAME: ${{ matrix.sign_name }}
+          SIGN: ${{ matrix.sign }}
+          AINVS: ${{ matrix.ainvs }}
+        run: |
+          set -euxo pipefail
+          OUT="out_${CURVE}_${SIGN_NAME}"
+          mkdir -p "$OUT"
+          cat > compute.gp <<GP
+          default(parisizemax,56000000000);
+          default(parisize,1000000000);
+          E0=ellinit(${AINVS});
+          print("START curve=${CURVE} sign=${SIGN} conductor=",ellglobalred(E0)[1]);
+          t0=getwalltime();
+          R0=msfromell(E0,${SIGN});
+          if(type(R0)!="t_VEC" || #R0!=2,error("msfromell output type/length ",type(R0),"/",#R0));
+          V0=R0[2];
+          if(type(V0)!="t_COL",error("modular symbol type ",type(V0)));
+          if(#V0<1000,error("modular symbol length too small ",#V0));
+          if(!msissymbol(R0[1],V0),error("computed vector is not a modular symbol"));
+          D0=denominator(V0);
+          I0=D0*V0;
+          C0=content(I0);
+          P0=I0/C0;
+          writebin("${OUT}/space.gpbin",R0[1]);
+          writebin("${OUT}/symbol.gpbin",V0);
+          writebin("${OUT}/primitive_integral.gpbin",P0);
+          write("${OUT}/metadata.gp",Str("curve=${CURVE}"));
+          write("${OUT}/metadata.gp",Str("sign=${SIGN}"));
+          write("${OUT}/metadata.gp",Str("type=",type(V0)));
+          write("${OUT}/metadata.gp",Str("length=",#V0));
+          write("${OUT}/metadata.gp",Str("denominator=",D0));
+          write("${OUT}/metadata.gp",Str("integral_content=",C0));
+          write("${OUT}/metadata.gp",Str("level=",msgetlevel(R0[1])));
+          write("${OUT}/metadata.gp",Str("elapsed_ms=",getwalltime()-t0));
+          print("COMPUTE_OK type=",type(V0)," length=",#V0," denominator=",D0," content=",C0);
+          quit
+          GP
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
+          /usr/bin/time -v "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq < compute.gp > "$OUT/compute_stdout.log" 2> "$OUT/compute_stderr.log"
+          grep -q '^COMPUTE_OK type=t_COL length=' "$OUT/compute_stdout.log"
+          cat > verify.gp <<GP
+          M1=read("${OUT}/space.gpbin");
+          V1=read("${OUT}/symbol.gpbin");
+          P1=read("${OUT}/primitive_integral.gpbin");
+          if(type(V1)!="t_COL" || type(P1)!="t_COL",error("reload type failure"));
+          if(#V1!=#P1,error("reload length failure"));
+          if(!msissymbol(M1,V1) || !msissymbol(M1,P1),error("reload symbol failure"));
+          if(content(P1)!=1,error("primitive content is ",content(P1)));
+          print("VERIFY_OK length=",#V1," primitive_content=",content(P1));
+          quit
+          GP
+          "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq < verify.gp > "$OUT/verify_stdout.log" 2> "$OUT/verify_stderr.log"
+          grep -q '^VERIFY_OK length=' "$OUT/verify_stdout.log"
+          cat "$OUT/metadata.gp"
+          cat "$OUT/compute_stdout.log"
+          cat "$OUT/verify_stdout.log"
+          free -h > "$OUT/memory_after.txt"
+          sha256sum "$OUT"/* > "$OUT/SHA256SUMS.txt"
+
+      - name: Upload verified modular symbol
+        uses: actions/upload-artifact@v4
+        with:
+          name: c502-msfromell-${{ matrix.curve }}-${{ matrix.sign_name }}
+          path: out_${{ matrix.curve }}_${{ matrix.sign_name }}
+          if-no-files-found: error
+          retention-days: 3

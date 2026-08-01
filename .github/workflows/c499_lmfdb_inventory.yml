@@ -1,0 +1,166 @@
+name: C499 LMFDB SQL Inventory
+
+on:
+  push:
+    branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PGHOST: devmirror.lmfdb.xyz
+      PGPORT: '5432'
+      PGDATABASE: lmfdb
+      PGUSER: lmfdb
+      PGPASSWORD: lmfdb
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Freeze schema and level-333839 weight-2 rows
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p c499_lmfdb_sql
+
+          psql -X -v ON_ERROR_STOP=1 -At -F $'\t' <<'SQL' > c499_lmfdb_sql/server_version.tsv
+          select current_database(), current_user, version();
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/schema_columns.csv
+          select table_name, ordinal_position, column_name, data_type, udt_name
+          from information_schema.columns
+          where table_schema='public'
+            and table_name in ('mf_newforms','mf_newspaces','mf_hecke_nf','mf_hecke_traces','mf_hecke_charpolys')
+          order by table_name, ordinal_position;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/database_coverage.csv
+          select
+            (select count(*) from mf_newforms) as total_newforms,
+            (select coalesce(max(level),0) from mf_newforms) as maximum_level_any_weight,
+            (select count(*) from mf_newforms where weight=2) as total_weight2_newforms,
+            (select coalesce(max(level),0) from mf_newforms where weight=2) as maximum_level_weight2,
+            (select count(*) from mf_newforms where level=333839 and weight=2) as target_orbit_count,
+            (select count(*) from mf_newspaces where level=333839 and weight=2) as target_newspace_count;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/newforms_level333839_weight2.csv
+          select *
+          from mf_newforms
+          where level=333839 and weight=2
+          order by label;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/newspaces_level333839_weight2.csv
+          select *
+          from mf_newspaces
+          where level=333839 and weight=2
+          order by label;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/orbit_dimension_audit.csv
+          select count(*) as orbit_count,
+                 coalesce(sum(dim),0) as sum_orbit_dimensions,
+                 coalesce(min(dim),0) as min_orbit_dimension,
+                 coalesce(max(dim),0) as max_orbit_dimension,
+                 count(*) filter (where dim=1) as rational_orbit_count
+          from mf_newforms
+          where level=333839 and weight=2;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/hecke_nf_selected_level.csv
+          select h.*
+          from mf_hecke_nf h
+          join mf_newforms f using (hecke_orbit_code)
+          where f.level=333839 and f.weight=2
+          order by f.label;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/hecke_traces_selected_level.csv
+          select h.*
+          from mf_hecke_traces h
+          join mf_newforms f using (hecke_orbit_code)
+          where f.level=333839 and f.weight=2
+          order by f.label;
+          SQL
+
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_lmfdb_sql/hecke_charpolys_selected_level.csv
+          select h.*
+          from mf_hecke_charpolys h
+          join mf_newforms f using (hecke_orbit_code)
+          where f.level=333839 and f.weight=2
+          order by f.label;
+          SQL
+
+          python3 - <<'PY'
+          import csv, hashlib, json, pathlib
+          root=pathlib.Path('c499_lmfdb_sql')
+
+          def first_row(path):
+              rows=list(csv.DictReader(path.open(encoding='utf-8')))
+              return rows[0] if rows else {}
+
+          def integer(value, default=0):
+              try:
+                  return int(value)
+              except (TypeError, ValueError):
+                  return default
+
+          audit=first_row(root/'orbit_dimension_audit.csv')
+          coverage=first_row(root/'database_coverage.csv')
+          rows=list(csv.DictReader((root/'newforms_level333839_weight2.csv').open(encoding='utf-8')))
+          summary={
+              'schema':'bsd-c499-lmfdb-sql-inventory-v2',
+              'level':333839,
+              'weight':2,
+              'orbit_count':integer(audit.get('orbit_count')),
+              'sum_orbit_dimensions':integer(audit.get('sum_orbit_dimensions')),
+              'min_orbit_dimension':integer(audit.get('min_orbit_dimension')),
+              'max_orbit_dimension':integer(audit.get('max_orbit_dimension')),
+              'rational_orbit_count':integer(audit.get('rational_orbit_count')),
+              'labels':[r.get('label','') for r in rows if r.get('label')],
+              'dimensions':{r['label']:integer(r.get('dim')) for r in rows if r.get('label')},
+              'field_polynomials':{r['label']:r.get('field_poly') for r in rows if r.get('label')},
+              'self_twist_discs':{r['label']:r.get('self_twist_discs') for r in rows if r.get('label')},
+              'newspace_dimension_reference':23980,
+              'database_coverage':{k:integer(v) for k,v in coverage.items()},
+          }
+          summary['dimension_sum_matches_reference']=(summary['sum_orbit_dimensions']==23980)
+          summary['target_present_in_mirror']=(summary['orbit_count']>0 or summary['database_coverage'].get('target_newspace_count',0)>0)
+          (root/'SUMMARY.json').write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n',encoding='utf-8',newline='\n')
+          lines=['# C499 LMFDB SQL inventory','',
+                 f"- target orbit rows: {summary['orbit_count']}",
+                 f"- target newspace rows: {summary['database_coverage'].get('target_newspace_count',0)}",
+                 f"- target present in mirror: {summary['target_present_in_mirror']}",
+                 f"- sum of target orbit dimensions: {summary['sum_orbit_dimensions']}",
+                 f"- independent newspace dimension: {summary['newspace_dimension_reference']}",
+                 f"- dimension sum matches: {summary['dimension_sum_matches_reference']}",
+                 f"- mirror max level in weight 2: {summary['database_coverage'].get('maximum_level_weight2',0)}",
+                 f"- total weight-2 orbit rows: {summary['database_coverage'].get('total_weight2_newforms',0)}",'',
+                 'A zero target count proves only absence from this mirror snapshot, not absence of mathematical orbits.']
+          (root/'SUMMARY.md').write_text('\n'.join(lines)+'\n',encoding='utf-8',newline='\n')
+          paths=sorted(p for p in root.iterdir() if p.is_file() and p.name!='SHA256SUMS.txt')
+          with (root/'SHA256SUMS.txt').open('w',encoding='utf-8',newline='\n') as fh:
+              for p in paths:
+                  fh.write(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n')
+          print(json.dumps(summary,sort_keys=True))
+          PY
+
+          cat c499_lmfdb_sql/SUMMARY.md
+          du -h c499_lmfdb_sql/*
+
+      - name: Upload C499 SQL inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c499-lmfdb-sql-inventory
+          path: c499_lmfdb_sql
+          if-no-files-found: error
+          retention-days: 3

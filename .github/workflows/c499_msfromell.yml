@@ -1,0 +1,77 @@
+name: C501 PARI Modular Symbol Diagnostic
+
+on:
+  push:
+    branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  modular-symbol:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Install dependencies and PARI-GP 2.17.4
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install gmp readline
+          curl -fL --retry 5 -o pari.tar.gz https://pari.math.u-bordeaux.fr/pub/pari/unix/pari-2.17.4.tar.gz
+          tar -xzf pari.tar.gz
+          cd pari-2.17.4
+          ./Configure --prefix="$GITHUB_WORKSPACE/pari-install"
+          make -j2 gp
+          make install
+          DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib" "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq <<'GP' || true
+          print(version())
+          quit
+          GP
+
+      - name: Diagnose one signed modular symbol
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out_diag
+          cat > compute.gp <<'GP'
+          default(parisizemax,10500000000);
+          default(parisize,1000000000);
+          print("STACKS ",default(parisize)," ",default(parisizemax));
+          E0=ellinit([0,-1,1,-5698610837,-165575711809938]);
+          print("CURVE_OK conductor=",ellglobalred(E0)[1]);
+          t0=getwalltime();
+          R0=msfromell(E0,1);
+          print("MSFROMELL_RETURN type=",type(R0)," length=",#R0," elapsed=",getwalltime()-t0);
+          if(type(R0)!="t_VEC" || #R0!=2,error("msfromell output type/length ",type(R0),"/",#R0));
+          V0=R0[2];
+          print("VECTOR type=",type(V0)," length=",#V0);
+          if(type(V0)!="t_COL",error("modular symbol type ",type(V0)));
+          writebin("out_diag/symbol.gpbin",V0);
+          writebin("out_diag/space.gpbin",R0[1]);
+          quit
+          GP
+          export DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
+          set +e
+          "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq < compute.gp > out_diag/stdout.log 2> out_diag/stderr.log
+          RC=$?
+          set -e
+          echo "$RC" > out_diag/exit_code.txt
+          echo '--- stdout ---'
+          cat out_diag/stdout.log
+          echo '--- stderr ---'
+          cat out_diag/stderr.log
+          echo '--- files ---'
+          ls -lah out_diag
+          sha256sum out_diag/* > out_diag/SHA256SUMS.txt || true
+          exit "$RC"
+
+      - name: Upload diagnostic unconditionally
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c501-msfromell-diagnostic
+          path: out_diag
+          if-no-files-found: warn
+          retention-days: 3

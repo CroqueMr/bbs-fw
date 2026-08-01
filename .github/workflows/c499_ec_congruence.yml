@@ -1,0 +1,74 @@
+name: C499 Elliptic Congruence Inventory
+
+on:
+  push:
+    branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PGHOST: devmirror.lmfdb.xyz
+      PGPORT: '5432'
+      PGDATABASE: lmfdb
+      PGUSER: lmfdb
+      PGPASSWORD: lmfdb
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Freeze elliptic-curve schemas and conductor rows
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p c499_ec
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_ec/ec_tables.csv
+          select table_name
+          from information_schema.tables
+          where table_schema='public' and table_name like 'ec_%'
+          order by table_name;
+          SQL
+          psql -X -v ON_ERROR_STOP=1 --csv <<'SQL' > c499_ec/ec_schema.csv
+          select table_name, ordinal_position, column_name, data_type, udt_name
+          from information_schema.columns
+          where table_schema='public' and table_name like 'ec_%'
+          order by table_name, ordinal_position;
+          SQL
+          for table in ec_curvedata ec_mwbsd ec_classdata ec_localdata ec_galrep ec_iwasawa; do
+            if psql -X -Atqc "select to_regclass('public.$table') is not null" | grep -qx t; then
+              psql -X -v ON_ERROR_STOP=1 --csv -c "select * from $table where conductor=333839 order by 1" > "c499_ec/${table}_333839.csv" || true
+            fi
+          done
+          python3 - <<'PY'
+          import csv, hashlib, json, pathlib
+          root=pathlib.Path('c499_ec')
+          summary={'schema':'bsd-c499-ec-congruence-inventory-v1','conductor':333839,'files':{},'candidate_fields':{}}
+          for p in sorted(root.glob('*.csv')):
+              rows=list(csv.DictReader(p.open(encoding='utf-8')))
+              summary['files'][p.name]={'row_count':len(rows),'columns':list(rows[0].keys()) if rows else []}
+              for r in rows:
+                  label=r.get('lmfdb_label') or r.get('label') or r.get('Clabel') or r.get('iso') or ''
+                  if label and any(x in label for x in ['333839.a','333839.b','333839a','333839b']):
+                      summary['candidate_fields'].setdefault(label,{})[p.stem]=r
+          (root/'SUMMARY.json').write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n',encoding='utf-8',newline='\n')
+          with (root/'SHA256SUMS.txt').open('w',encoding='utf-8',newline='\n') as fh:
+              for p in sorted(x for x in root.iterdir() if x.is_file() and x.name!='SHA256SUMS.txt'):
+                  fh.write(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n')
+          print(json.dumps({'files':summary['files'],'labels':sorted(summary['candidate_fields'])},sort_keys=True))
+          PY
+          cat c499_ec/SUMMARY.json
+
+      - name: Upload C499 elliptic inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c499-ec-congruence-inventory
+          path: c499_ec
+          if-no-files-found: error
+          retention-days: 3
