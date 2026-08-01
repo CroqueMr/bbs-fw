@@ -3,6 +3,8 @@ name: C503 High-Memory Newspace Orbit Split
 on:
   push:
     branches: [c503-mfsplit-swap-20260801]
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
