@@ -1,0 +1,71 @@
+name: C501 PARI Newspace Split
+
+on:
+  push:
+    branches: [c499-lmfdb-inventory-20260731]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  split:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - name: Install dependencies and PARI-GP 2.17.4
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install gmp readline
+          curl -fL --retry 5 -o pari.tar.gz https://pari.math.u-bordeaux.fr/pub/pari/unix/pari-2.17.4.tar.gz
+          tar -xzf pari.tar.gz
+          cd pari-2.17.4
+          ./Configure --prefix="$GITHUB_WORKSPACE/pari-install"
+          make -j2 gp
+          make install
+
+      - name: Split all coefficient fields of degree at most 20
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out_split
+          cat > split.gp <<'GP'
+          default(parisizemax,13000000000);
+          default(parisize,1000000000);
+          print("STACKS ",default(parisize)," ",default(parisizemax));
+          t0=getwalltime();
+          MF=mfinit([333839,2],0);
+          print("MFINIT_OK dim=",mfdim(MF)," elapsed=",getwalltime()-t0);
+          t1=getwalltime();
+          S=mfsplit(MF,20,20);
+          print("MFSPLIT_OK count=",#S[2]," elapsed=",getwalltime()-t1);
+          print("DEGREES ",apply(poldegree,S[2]));
+          writebin("out_split/split.gpbin",S);
+          write("out_split/fields.txt",S[2]);
+          write("out_split/metadata.gp",Str("newspace_dimension=",mfdim(MF)));
+          write("out_split/metadata.gp",Str("orbit_count_le20=",#S[2]));
+          write("out_split/metadata.gp",Str("degrees=",apply(poldegree,S[2])));
+          quit
+          GP
+          export DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
+          set +e
+          "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq < split.gp > out_split/stdout.log 2> out_split/stderr.log
+          RC=$?
+          set -e
+          echo "$RC" > out_split/exit_code.txt
+          cat out_split/stdout.log
+          cat out_split/stderr.log
+          ls -lah out_split
+          sha256sum out_split/* > out_split/SHA256SUMS.txt || true
+          exit "$RC"
+
+      - name: Upload split result unconditionally
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c501-mfsplit-degree20
+          path: out_split
+          if-no-files-found: warn
+          retention-days: 3
