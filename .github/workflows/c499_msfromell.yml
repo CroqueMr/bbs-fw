@@ -1,4 +1,4 @@
-name: C500 PARI Modular Symbols Verified
+name: C501 PARI Modular Symbols High Memory
 
 on:
   push:
@@ -13,6 +13,7 @@ jobs:
   modular-symbol:
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         include:
           - curve: a
@@ -31,11 +32,14 @@ jobs:
             sign_name: minus
             sign: -1
             ainvs: '[0,-1,1,-47095957,124416608755]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: macos-15
+    timeout-minutes: 90
     steps:
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential curl ca-certificates libgmp-dev libreadline-dev
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install gmp readline
 
       - name: Build PARI-GP 2.17.4
         shell: bash
@@ -44,9 +48,12 @@ jobs:
           curl -fL --retry 5 -o pari.tar.gz https://pari.math.u-bordeaux.fr/pub/pari/unix/pari-2.17.4.tar.gz
           tar -xzf pari.tar.gz
           cd pari-2.17.4
+          export CPPFLAGS="-I$(brew --prefix gmp)/include -I$(brew --prefix readline)/include"
+          export LDFLAGS="-L$(brew --prefix gmp)/lib -L$(brew --prefix readline)/lib"
           ./Configure --prefix="$GITHUB_WORKSPACE/pari-install"
           make -j2 gp
           make install
+          echo 'print(pari_version()); quit' | "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq
 
       - name: Compute and independently reload modular symbol
         shell: bash
@@ -60,25 +67,33 @@ jobs:
           OUT="out_${CURVE}_${SIGN_NAME}"
           mkdir -p "$OUT"
           cat > compute.gp <<GP
-          default(parisizemax,7000000000);
-          default(parisize,1000000000);
+          default(parisizemax,11500000000);
+          default(parisize,2000000000);
           E0=ellinit(${AINVS});
           t0=getwalltime();
           R0=msfromell(E0,${SIGN});
+          if(type(R0)!="t_VEC" || #R0!=2,error("msfromell output type/length ",type(R0),"/",#R0));
           V0=R0[2];
+          if(type(V0)!="t_COL",error("modular symbol type ",type(V0)));
+          if(#V0<1000,error("modular symbol length too small ",#V0));
           writebin("${OUT}/symbol.gpbin",V0);
+          writebin("${OUT}/space.gpbin",R0[1]);
           write("${OUT}/compute_metadata.gp",Str("type=",type(V0)));
           write("${OUT}/compute_metadata.gp",Str("length=",#V0));
           write("${OUT}/compute_metadata.gp",Str("elapsed_ms=",getwalltime()-t0));
+          write("${OUT}/compute_metadata.gp",Str("level=",msgetlevel(R0[1])));
           quit
           GP
-          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
-          /usr/bin/time -v "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq compute.gp > "$OUT/compute_stdout.log" 2> "$OUT/compute_resource.log"
+          export DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
+          "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq compute.gp > "$OUT/compute_stdout.log" 2> "$OUT/compute_stderr.log"
           test -s "$OUT/symbol.gpbin"
+          test -s "$OUT/space.gpbin"
           cat > verify.gp <<GP
           V1=read("${OUT}/symbol.gpbin");
+          M1=read("${OUT}/space.gpbin");
           if(type(V1)!="t_COL",error("binary reload type is ",type(V1)));
           if(#V1<1000,error("binary reload length too small: ",#V1));
+          if(!msissymbol(M1,V1),error("reloaded vector is not a modular symbol"));
           D1=denominator(V1);
           I1=D1*V1;
           C1=content(I1);
@@ -91,25 +106,23 @@ jobs:
           write("${OUT}/audit.gp",Str("length=",#V1));
           write("${OUT}/audit.gp",Str("denominator=",D1));
           write("${OUT}/audit.gp",Str("integral_content=",C1));
-          write("${OUT}/audit.gp",Str("first=",V1[1]));
-          write("${OUT}/audit.gp",Str("last=",V1[#V1]));
+          write("${OUT}/audit.gp",Str("is_symbol=1"));
           print("AUDIT_OK type=",type(V1)," length=",#V1," denominator=",D1," content=",C1);
           quit
           GP
           "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq verify.gp > "$OUT/verify_stdout.log" 2> "$OUT/verify_stderr.log"
-          test -s "$OUT/audit.gp"
-          test -s "$OUT/primitive_integral.gpbin"
+          grep -q '^AUDIT_OK type=t_COL length=' "$OUT/verify_stdout.log"
           cat "$OUT/compute_metadata.gp"
           cat "$OUT/audit.gp"
           cat "$OUT/verify_stdout.log"
+          cat "$OUT/compute_stderr.log"
           cat "$OUT/verify_stderr.log"
-          grep -E 'Elapsed|Maximum resident|Exit status' "$OUT/compute_resource.log"
           sha256sum "$OUT"/* > "$OUT/SHA256SUMS.txt"
 
       - name: Upload verified modular symbol
         uses: actions/upload-artifact@v4
         with:
-          name: c500-msfromell-${{ matrix.curve }}-${{ matrix.sign_name }}
+          name: c501-msfromell-${{ matrix.curve }}-${{ matrix.sign_name }}
           path: out_${{ matrix.curve }}_${{ matrix.sign_name }}
           if-no-files-found: error
           retention-days: 3
