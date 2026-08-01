@@ -54,7 +54,7 @@ jobs:
           GP
           export DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
           set +e
-          "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq compute.gp > out_diag/stdout.log 2> out_diag/stderr.log
+          "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq < compute.gp > out_diag/stdout.log 2> out_diag/stderr.log
           RC=$?
           set -e
           echo "$RC" > out_diag/exit_code.txt
