@@ -1,10 +1,8 @@
-name: C499 PARI Modular Symbols
+name: C500 PARI Modular Symbols Verified
 
 on:
   push:
     branches: [c499-lmfdb-inventory-20260731]
-  pull_request:
-    branches: [master]
 
 permissions:
   contents: read
@@ -48,7 +46,7 @@ jobs:
           make -j2 gp
           make install
 
-      - name: Compute canonical Neron-normalized modular symbol
+      - name: Compute and independently reload modular symbol
         shell: bash
         env:
           CURVE: ${{ matrix.curve }}
@@ -57,47 +55,57 @@ jobs:
           AINVS: ${{ matrix.ainvs }}
         run: |
           set -euxo pipefail
-          mkdir -p "out_${CURVE}_${SIGN_NAME}"
+          OUT="out_${CURVE}_${SIGN_NAME}"
+          mkdir -p "$OUT"
           cat > compute.gp <<GP
           default(parisizemax,7000000000);
           default(parisize,1000000000);
-          ell=ellinit(${AINVS});
-          start_ms=getwalltime();
-          pair=msfromell(ell,${SIGN});
-          symv=pair[2];
-          if(type(symv)!="t_COL",error("unexpected modular symbol type ",type(symv)));
-          den=denominator(symv);
-          integral=den*symv;
-          cont=content(integral);
-          primitive=integral/cont;
-          if(type(primitive)!="t_COL",error("unexpected primitive type"));
-          writebin("out_${CURVE}_${SIGN_NAME}/symbol.gpbin",symv);
-          writebin("out_${CURVE}_${SIGN_NAME}/primitive_integral.gpbin",primitive);
-          write("out_${CURVE}_${SIGN_NAME}/symbol.txt",Str(symv));
-          write("out_${CURVE}_${SIGN_NAME}/primitive_integral.txt",Str(primitive));
-          write("out_${CURVE}_${SIGN_NAME}/metadata.gp","curve=${CURVE}");
-          write("out_${CURVE}_${SIGN_NAME}/metadata.gp","sign=${SIGN}");
-          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("type=",type(symv)));
-          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("length=",#symv));
-          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("denominator=",den));
-          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("integral_content=",cont));
-          write("out_${CURVE}_${SIGN_NAME}/metadata.gp",Str("elapsed_ms=",getwalltime()-start_ms));
-          write("out_${CURVE}_${SIGN_NAME}/metadata.gp","level=333839");
+          E0=ellinit(${AINVS});
+          t0=getwalltime();
+          R0=msfromell(E0,${SIGN});
+          V0=R0[2];
+          writebin("${OUT}/symbol.gpbin",V0);
+          write("${OUT}/compute_metadata.gp",Str("type=",type(V0)));
+          write("${OUT}/compute_metadata.gp",Str("length=",#V0));
+          write("${OUT}/compute_metadata.gp",Str("elapsed_ms=",getwalltime()-t0));
           quit
           GP
           export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
-          /usr/bin/time -v "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq compute.gp > "out_${CURVE}_${SIGN_NAME}/stdout.log" 2> "out_${CURVE}_${SIGN_NAME}/resource.log"
-          grep -q '^type=t_COL$' "out_${CURVE}_${SIGN_NAME}/metadata.gp"
-          grep -q '^level=333839$' "out_${CURVE}_${SIGN_NAME}/metadata.gp"
-          test "$(wc -c < "out_${CURVE}_${SIGN_NAME}/symbol.txt")" -gt 1000
-          sha256sum "out_${CURVE}_${SIGN_NAME}"/* > "out_${CURVE}_${SIGN_NAME}/SHA256SUMS.txt"
-          cat "out_${CURVE}_${SIGN_NAME}/metadata.gp"
-          grep -E 'Elapsed|Maximum resident|Exit status' "out_${CURVE}_${SIGN_NAME}/resource.log"
+          /usr/bin/time -v "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq compute.gp > "$OUT/compute_stdout.log" 2> "$OUT/compute_resource.log"
+          test -s "$OUT/symbol.gpbin"
+          cat > verify.gp <<GP
+          V1=read("${OUT}/symbol.gpbin");
+          if(type(V1)!="t_COL",error("binary reload type is ",type(V1)));
+          if(#V1<1000,error("binary reload length too small: ",#V1));
+          D1=denominator(V1);
+          I1=D1*V1;
+          C1=content(I1);
+          P1=I1/C1;
+          if(type(P1)!="t_COL",error("primitive reload type is ",type(P1)));
+          writebin("${OUT}/primitive_integral.gpbin",P1);
+          write("${OUT}/audit.gp",Str("curve=${CURVE}"));
+          write("${OUT}/audit.gp",Str("sign=${SIGN}"));
+          write("${OUT}/audit.gp",Str("type=",type(V1)));
+          write("${OUT}/audit.gp",Str("length=",#V1));
+          write("${OUT}/audit.gp",Str("denominator=",D1));
+          write("${OUT}/audit.gp",Str("integral_content=",C1));
+          write("${OUT}/audit.gp",Str("first=",V1[1]));
+          write("${OUT}/audit.gp",Str("last=",V1[#V1]));
+          print("AUDIT_OK type=",type(V1)," length=",#V1," denominator=",D1," content=",C1);
+          quit
+          GP
+          "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq verify.gp > "$OUT/verify_stdout.log" 2> "$OUT/verify_stderr.log"
+          grep -q '^AUDIT_OK type=t_COL length=' "$OUT/verify_stdout.log"
+          cat "$OUT/compute_metadata.gp"
+          cat "$OUT/audit.gp"
+          cat "$OUT/verify_stdout.log"
+          grep -E 'Elapsed|Maximum resident|Exit status' "$OUT/compute_resource.log"
+          sha256sum "$OUT"/* > "$OUT/SHA256SUMS.txt"
 
-      - name: Upload modular symbol
+      - name: Upload verified modular symbol
         uses: actions/upload-artifact@v4
         with:
-          name: c499-msfromell-v2-${{ matrix.curve }}-${{ matrix.sign_name }}
+          name: c500-msfromell-${{ matrix.curve }}-${{ matrix.sign_name }}
           path: out_${{ matrix.curve }}_${{ matrix.sign_name }}
           if-no-files-found: error
           retention-days: 3
