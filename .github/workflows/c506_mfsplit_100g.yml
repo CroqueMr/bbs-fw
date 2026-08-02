@@ -3,6 +3,8 @@ name: C506 PARI 100GB Orbit Inventory
 on:
   push:
     branches: [c506-pari-100g-20260802]
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
