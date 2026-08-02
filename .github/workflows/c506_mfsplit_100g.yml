@@ -1,0 +1,101 @@
+name: C506 PARI 100GB Orbit Inventory
+
+on:
+  push:
+    branches: [c506-pari-100g-20260802]
+
+permissions:
+  contents: read
+
+jobs:
+  split:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Reclaim disk and configure swap
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          AVAIL=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          SIZE=$(( AVAIL > 62 ? 58 : AVAIL - 5 ))
+          test "$SIZE" -ge 40
+          sudo fallocate -l "${SIZE}G" /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          df -h /
+
+      - name: Build PARI-GP 2.17.4
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl ca-certificates libgmp-dev libreadline-dev
+          curl -fL --retry 5 -o pari.tar.gz https://pari.math.u-bordeaux.fr/pub/pari/unix/pari-2.17.4.tar.gz
+          tar -xzf pari.tar.gz
+          cd pari-2.17.4
+          ./Configure --prefix="$GITHUB_WORKSPACE/pari-install"
+          make -j2 gp
+          make install
+          echo 'print(version());quit' | "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq
+
+      - name: Compute all coefficient fields of degree at most 30
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out_split
+          cat > split.gp <<'GP'
+          default(parisizemax,110000000000);
+          default(parisize,1000000000);
+          print("STACKS ",default(parisize)," ",default(parisizemax));
+          t0=getwalltime();
+          MF=mfinit([333839,2],0);
+          if(type(MF)!="t_VEC",error("mfinit failed type=",type(MF)));
+          d=mfdim(MF);
+          if(d!=23980,error("unexpected newspace dimension ",d));
+          print("MFINIT_OK dim=",d," elapsed_ms=",getwalltime()-t0);
+          write("out_split/stage.gp",Str("mfinit_ok=1"));
+          write("out_split/stage.gp",Str("newspace_dimension=",d));
+          t1=getwalltime();
+          S=mfsplit(MF,30,30);
+          if(type(S)!="t_VEC" || #S!=2,error("mfsplit failed type/len=",type(S),"/",#S));
+          if(type(S[2])!="t_VEC",error("field list type=",type(S[2])));
+          degs=apply(poldegree,S[2]);
+          print("MFSPLIT_OK count=",#S[2]," elapsed_ms=",getwalltime()-t1);
+          print("DEGREES ",degs);
+          writebin("out_split/split.gpbin",S);
+          write("out_split/fields.txt",S[2]);
+          write("out_split/metadata.gp",Str("newspace_dimension=",d));
+          write("out_split/metadata.gp",Str("orbit_count_degree_le30=",#S[2]));
+          write("out_split/metadata.gp",Str("degrees=",degs));
+          print("C506_MFSPLIT_CERTIFIED");
+          quit
+          GP
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/pari-install/lib"
+          set +e
+          /usr/bin/time -v "$GITHUB_WORKSPACE/pari-install/bin/gp" -fq < split.gp > out_split/stdout.log 2> out_split/stderr.log
+          RC=$?
+          set -e
+          echo "$RC" > out_split/exit_code.txt
+          free -h > out_split/memory_after.txt
+          df -h / > out_split/disk_after.txt
+          sha256sum out_split/* > out_split/SHA256SUMS.txt || true
+          cat out_split/stdout.log
+          tail -n 300 out_split/stderr.log
+          test "$RC" -eq 0
+          grep -q '^C506_MFSPLIT_CERTIFIED$' out_split/stdout.log
+          test -s out_split/split.gpbin
+          test -s out_split/fields.txt
+
+      - name: Upload inventory or diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c506-mfsplit-degree30-100g
+          path: out_split
+          if-no-files-found: warn
+          retention-days: 3
