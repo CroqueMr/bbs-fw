@@ -69,8 +69,8 @@ jobs:
                      <<" optimality_plus="<<f.optimalityfactorplus
                      <<" degphi="<<f.degphi
                      <<" sfe="<<f.sfe
-                     <<" bplus_length="<<f.bplus.dim()
-                     <<" coordsplus_length="<<f.coordsplus.dim()<<std::endl;
+                     <<" bplus_length="<<dim(f.bplus)
+                     <<" coordsplus_length="<<dim(f.coordsplus)<<std::endl;
             std::cout<<"BPLUS "<<f.bplus<<std::endl;
             std::cout<<"COORDSPLUS "<<f.coordsplus<<std::endl;
             for(long a=1;a<11;a++){rational r(a,11);std::cout<<"CUSP a="<<a<<" plus="<<nf.plus_modular_symbol(r,0,1)<<std::endl;}
