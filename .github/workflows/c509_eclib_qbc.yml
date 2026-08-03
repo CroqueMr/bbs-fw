@@ -1,0 +1,51 @@
+name: C509 eclib QBC Modular Symbols
+
+on:
+  push:
+    branches: [c509-eclib-qbc-20260803]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Install eclib tools and headers
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y eclib-tools libec-dev libpari-dev libntl-dev
+
+      - name: Freeze package inventory and program help
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          dpkg-query -W -f='${Package}\t${Version}\n' eclib-tools libec-dev > out/packages.tsv
+          dpkg -L eclib-tools | sort > out/eclib-tools-files.txt
+          dpkg -L libec-dev | sort > out/libec-dev-files.txt
+          find /usr/bin -maxdepth 1 -type f -o -type l | grep -E '/(mwrank|newforms|manin|mod|ec)' | sort > out/candidate-programs.txt || true
+          while read -r prog; do
+            [ -x "$prog" ] || continue
+            name=$(basename "$prog")
+            ("$prog" --help || "$prog" -h || true) > "out/help_${name}.txt" 2>&1 || true
+          done < out/candidate-programs.txt
+          find /usr/share/doc/eclib-tools /usr/share/doc/libec-dev -type f -maxdepth 3 -print | sort > out/doc-files.txt || true
+          for f in $(cat out/doc-files.txt); do
+            case "$f" in *.gz) zcat "$f" ;; *) cat "$f" ;; esac >> out/docs-concatenated.txt 2>/dev/null || true
+          done
+          ls -lah out
+          sha256sum out/* > out/SHA256SUMS.txt
+
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: c509-eclib-diagnostic
+          path: out
+          if-no-files-found: error
+          retention-days: 3
