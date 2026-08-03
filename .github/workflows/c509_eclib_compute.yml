@@ -37,6 +37,7 @@ jobs:
           mkdir -p out
           cat > c509_eclib_qbc.cc <<'CPP'
           #include <iostream>
+          #include <sstream>
           #include <string>
           #include <utility>
           #include <eclib/newforms.h>
@@ -46,8 +47,6 @@ jobs:
           using std::cout;
           using std::endl;
           using std::string;
-
-          const scalar modulus(default_modulus<scalar>());
 
           ZZ zz(const char* s) {
             ZZ x;
@@ -63,7 +62,7 @@ jobs:
             CurveRed CR(CD);
             long N = I2long(getconductor(CR));
             cout << "CURVE_BEGIN " << label << " conductor=" << N << " curve=" << (Curve)CR << endl;
-            newforms nf(N, modulus, 1);
+            newforms nf(N, 1);
             nf.createfromcurve(0, CR, 80);
             cout << "NEWFORMS_CREATED label=" << label << " count=" << nf.n1ds << endl;
             if (nf.n1ds != 1) {
