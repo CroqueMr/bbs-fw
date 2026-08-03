@@ -43,7 +43,7 @@ jobs:
           using std::cout; using std::endl; using std::string; using std::vector;
           ZZ zz(const char* s){ ZZ x; std::stringstream ss; ss<<s; ss>>x; return x; }
           CurveRed curve(const char* a4,const char* a6){ Curve C(ZZ(0),ZZ(-1),ZZ(1),zz(a4),zz(a6)); Curvedata CD(C,1); return CurveRed(CD); }
-          void dump_vec(const char* name,const vec& v){ cout<<name<<" length="<<v.dim()<<" vector="<<v<<endl; }
+          void dump_vec(const char* name,const vec& v){ cout<<name<<" length="<<dim(v)<<" vector="<<v<<endl; }
           int main(){
             set_precision(100);
             CurveRed A=curve("-5698610837","-165575711809938");
@@ -56,7 +56,6 @@ jobs:
             nf.createfromcurves(0,curves,100);
             cout<<"COMMON_CREATED count="<<nf.n1ds<<endl;
             if(nf.n1ds!=2){ cout<<"BAD_COUNT "<<nf.n1ds<<endl; return 3; }
-            nf.sort_into_LMFDB_label_order();
             nf.make_projcoord();
             for(long i=0;i<2;i++){
               newform& f=nf.nflist[i];
