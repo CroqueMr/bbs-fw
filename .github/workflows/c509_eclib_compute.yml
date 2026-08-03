@@ -1,0 +1,142 @@
+name: C509 eclib Exact Canonical Symbols
+
+on:
+  push:
+    branches: [c509-eclib-qbc-20260803]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  compute:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Configure swap and install eclib
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 32G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config eclib-tools libec-dev libpari-dev libntl-dev libflint-dev libboost-system-dev libboost-thread-dev
+          pkg-config --modversion eclib
+          pkg-config --cflags --libs eclib
+          free -h
+
+      - name: Build exact canonical-symbol program
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          cat > c509_eclib_qbc.cc <<'CPP'
+          #include <iostream>
+          #include <string>
+          #include <utility>
+          #include <eclib/newforms.h>
+          #include <eclib/curve.h>
+          #include <eclib/periods.h>
+
+          using std::cout;
+          using std::endl;
+          using std::string;
+
+          const scalar modulus(default_modulus<scalar>());
+
+          ZZ zz(const char* s) {
+            ZZ x;
+            std::stringstream ss;
+            ss << s;
+            ss >> x;
+            return x;
+          }
+
+          void run_curve(const string& label, const char* a4s, const char* a6s) {
+            Curve C(ZZ(0), ZZ(-1), ZZ(1), zz(a4s), zz(a6s));
+            Curvedata CD(C, 1);
+            CurveRed CR(CD);
+            long N = I2long(getconductor(CR));
+            cout << "CURVE_BEGIN " << label << " conductor=" << N << " curve=" << (Curve)CR << endl;
+            newforms nf(N, modulus, 1);
+            nf.createfromcurve(0, CR, 80);
+            cout << "NEWFORMS_CREATED label=" << label << " count=" << nf.n1ds << endl;
+            if (nf.n1ds != 1) {
+              cout << "ERROR unexpected_newform_count=" << nf.n1ds << endl;
+              exit(2);
+            }
+            nf.make_projcoord();
+            rational zero(0,1);
+            rational pinf = nf.plus_modular_symbol(zero, 0, 1);
+            rational minf = nf.minus_modular_symbol(zero, 0, 1);
+            auto fullinf = nf.full_modular_symbol(zero, 0, 1);
+            newform& f = nf.nflist[0];
+            cout << "EXACT label=" << label
+                 << " plus_infty_0=" << pinf
+                 << " minus_infty_0=" << minf
+                 << " full_plus=" << fullinf.first
+                 << " full_minus=" << fullinf.second
+                 << " loverp=" << f.loverp
+                 << " type=" << f.type
+                 << " denomplus=" << f.denomplus
+                 << " denomminus=" << f.denomminus
+                 << " contplus=" << f.contplus
+                 << " contminus=" << f.contminus
+                 << " optimality_plus=" << f.optimalityfactorplus
+                 << " optimality_minus=" << f.optimalityfactorminus
+                 << " degphi=" << f.degphi
+                 << " sfe=" << f.sfe
+                 << endl;
+            for (long a=1; a<11; ++a) {
+              rational r(a,11);
+              cout << "CUSP label=" << label << " a=" << a
+                   << " plus=" << nf.plus_modular_symbol(r,0,1)
+                   << " minus=" << nf.minus_modular_symbol(r,0,1)
+                   << endl;
+            }
+            cout << "CURVE_END " << label << endl;
+          }
+
+          int main() {
+            set_precision(100);
+            run_curve("333839a1", "-5698610837", "-165575711809938");
+            run_curve("333839b1", "-47095957", "124416608755");
+            cout << "C509_ECLIB_CERTIFIED" << endl;
+            return 0;
+          }
+          CPP
+          g++ -O2 -std=c++17 c509_eclib_qbc.cc -o c509_eclib_qbc $(pkg-config --cflags --libs eclib)
+          ldd ./c509_eclib_qbc > out/ldd.txt
+          sha256sum c509_eclib_qbc c509_eclib_qbc.cc > out/program_sha256.txt
+
+      - name: Run exact computation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          set +e
+          /usr/bin/time -v ./c509_eclib_qbc > out/stdout.log 2> out/stderr.log
+          RC=$?
+          set -e
+          echo "$RC" > out/exit_code.txt
+          free -h > out/memory_after.txt
+          cat out/stdout.log
+          tail -n 200 out/stderr.log
+          sha256sum out/* > out/SHA256SUMS.txt || true
+          test "$RC" -eq 0
+          grep -q '^C509_ECLIB_CERTIFIED$' out/stdout.log
+
+      - name: Upload result or diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c509-eclib-exact-symbols
+          path: |
+            out
+            c509_eclib_qbc.cc
+          if-no-files-found: warn
+          retention-days: 3
