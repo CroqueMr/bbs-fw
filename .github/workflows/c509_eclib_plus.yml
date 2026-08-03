@@ -1,0 +1,108 @@
+name: C509 eclib Plus Canonical Symbols
+
+on:
+  push:
+    branches: [c509-eclib-qbc-20260803]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  plus-symbol:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - curve: a
+            label: 333839a1
+            a4: -5698610837
+            a6: -165575711809938
+          - curve: b
+            label: 333839b1
+            a4: -47095957
+            a6: 124416608755
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Configure swap and install eclib
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 32G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo apt-get update
+          sudo apt-get install -y build-essential libec-dev libpari-dev libntl-dev libflint-dev libmpfr-dev libboost-system-dev libboost-thread-dev
+
+      - name: Build signed-plus program
+        shell: bash
+        env:
+          LABEL: ${{ matrix.label }}
+          A4: ${{ matrix.a4 }}
+          A6: ${{ matrix.a6 }}
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          cat > plus.cc <<CPP
+          #include <iostream>
+          #include <sstream>
+          #include <eclib/newforms.h>
+          #include <eclib/curve.h>
+          ZZ zz(const char*s){ZZ x;std::stringstream q;q<<s;q>>x;return x;}
+          int main(){
+            Curve C(ZZ(0),ZZ(-1),ZZ(1),zz("${A4}"),zz("${A6}"));
+            Curvedata CD(C,1); CurveRed CR(CD); long N=I2long(getconductor(CR));
+            std::cout<<"START label=${LABEL} conductor="<<N<<std::endl;
+            newforms nf(N,1); nf.createfromcurve(+1,CR,100); nf.make_projcoord();
+            if(nf.n1ds!=1){std::cout<<"BAD_COUNT "<<nf.n1ds<<std::endl;return 2;}
+            newform& f=nf.nflist[0]; rational z(0,1);
+            std::cout<<"PLUS_EXACT label=${LABEL} infty_0="<<nf.plus_modular_symbol(z,0,1)
+                     <<" zero_0="<<nf.plus_modular_symbol(z,0,0)
+                     <<" loverp="<<f.loverp
+                     <<" denomplus="<<f.denomplus
+                     <<" contplus="<<f.contplus
+                     <<" optimality_plus="<<f.optimalityfactorplus
+                     <<" degphi="<<f.degphi
+                     <<" sfe="<<f.sfe
+                     <<" bplus_length="<<f.bplus.dim()
+                     <<" coordsplus_length="<<f.coordsplus.dim()<<std::endl;
+            std::cout<<"BPLUS "<<f.bplus<<std::endl;
+            std::cout<<"COORDSPLUS "<<f.coordsplus<<std::endl;
+            for(long a=1;a<11;a++){rational r(a,11);std::cout<<"CUSP a="<<a<<" plus="<<nf.plus_modular_symbol(r,0,1)<<std::endl;}
+            std::cout<<"C509_PLUS_CERTIFIED"<<std::endl;return 0;
+          }
+          CPP
+          g++ -O2 -std=c++17 plus.cc -o plus -lec -lntl -lpari -lflint -lmpfr -lgmp -lboost_thread -lboost_system -lpthread
+          sha256sum plus plus.cc > out/program_sha256.txt
+
+      - name: Run exact plus computation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          set +e
+          /usr/bin/time -v ./plus > out/stdout.log 2> out/stderr.log
+          RC=$?
+          set -e
+          echo "$RC" > out/exit_code.txt
+          free -h > out/memory_after.txt
+          tail -n 200 out/stdout.log
+          tail -n 200 out/stderr.log
+          sha256sum out/* > out/SHA256SUMS.txt || true
+          test "$RC" -eq 0
+          grep -q '^C509_PLUS_CERTIFIED$' out/stdout.log
+
+      - name: Upload result or diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c509-eclib-plus-${{ matrix.curve }}
+          path: |
+            out
+            plus.cc
+          if-no-files-found: warn
+          retention-days: 3
