@@ -3,6 +3,8 @@ name: C516 CM Hida Anchor Audit
 on:
   push:
     branches: [c516-cm-hida-anchor-20260806]
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
@@ -32,8 +34,8 @@ jobs:
           pdftotext -layout out/epw.pdf out/epw.txt
           grep -n -i -E 'main theorem|theorem [0-9]|assume|hypothes|ordinary|split|irreducible|class number|CM field|Kato' out/mueller.txt > out/mueller_key_lines.txt || true
           grep -n -E 'Theorem 1\.|Corollary 1\.|absolutely irreducible|p-ordinary|p-distinguished|main conjecture holds' out/epw.txt > out/epw_key_lines.txt || true
-          sed -n '1,260p' out/mueller.txt > out/mueller_first_pages.txt
-          sed -n '1,180p' out/epw.txt > out/epw_first_pages.txt
+          sed -n '1,320p' out/mueller.txt > out/mueller_first_pages.txt
+          sed -n '1,220p' out/epw.txt > out/epw_first_pages.txt
           sha256sum out/mueller.pdf out/epw.pdf out/mueller.txt out/epw.txt > out/source_sha256.txt
 
       - name: Compute exact CM anchor data
@@ -70,23 +72,24 @@ jobs:
         run: |
           set -euxo pipefail
           python3 - <<'PY'
-          import json, pathlib, re, hashlib
+          import json, pathlib, re, hashlib, subprocess
           root=pathlib.Path('out')
           txt=(root/'mueller.txt').read_text(errors='replace')
           epw=(root/'epw.txt').read_text(errors='replace')
-          def around(text, pattern, radius=1000):
-              m=re.search(pattern,text,re.I)
-              if not m: return None
-              return text[max(0,m.start()-radius):min(len(text),m.end()+radius)]
-          theorem_patterns=[r'Theorem\s+1\.1',r'Theorem\s+1\.2',r'Theorem\s+5\.\d+',r'main theorem']
-          snippets={p:around(txt,p,1800) for p in theorem_patterns}
+          def all_matches(text, pattern, radius=1800):
+              out=[]
+              for m in re.finditer(pattern,text,re.I):
+                  out.append(text[max(0,m.start()-radius):min(len(text),m.end()+radius)])
+              return out[:12]
           summary={
             'schema':'bsd-c516-cm-hida-source-audit-v1',
             'mueller_pdf_sha256':hashlib.sha256((root/'mueller.pdf').read_bytes()).hexdigest(),
             'epw_pdf_sha256':hashlib.sha256((root/'epw.pdf').read_bytes()).hexdigest(),
-            'mueller_page_count':int(__import__('subprocess').check_output(['pdfinfo',str(root/'mueller.pdf')]).decode().split('Pages:')[1].splitlines()[0].strip()),
-            'mueller_theorem_snippets':snippets,
-            'epw_theorem1_present':'If µ' in epw and 'for all f' in epw,
+            'mueller_page_count':int(subprocess.check_output(['pdfinfo',str(root/'mueller.pdf')]).decode().split('Pages:')[1].splitlines()[0].strip()),
+            'mueller_theorem_snippets':all_matches(txt,r'Theorem\s+[0-9]+(?:\.[0-9]+)*'),
+            'mueller_hypothesis_snippets':all_matches(txt,r'Assume|Suppose|hypotheses'),
+            'epw_theorem1_snippets':all_matches(epw,r'Theorem\s+1\.'),
+            'epw_corollary1_snippets':all_matches(epw,r'Corollary\s+1\.'),
             'anchor_exact':(root/'anchor_exact.txt').read_text().splitlines(),
           }
           (root/'SUMMARY.json').write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n')
