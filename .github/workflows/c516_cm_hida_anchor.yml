@@ -1,0 +1,103 @@
+name: C516 CM Hida Anchor Audit
+
+on:
+  push:
+    branches: [c516-cm-hida-anchor-20260806]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates poppler-utils pari-gp
+
+      - name: Freeze Mueller theorem and EPW theorem
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          MUELLER='https://www.cambridge.org/core/services/aop-cambridge-core/content/view/00D139809EC2D0C1638FD579EF97ABD5/S0017089524000016a.pdf/katos-main-conjecture-for-potentially-ordinary-primes.pdf'
+          EPW='https://arxiv.org/pdf/math/0404484'
+          curl -fL --retry 5 -A 'Mozilla/5.0' -o out/mueller.pdf "$MUELLER"
+          curl -fL --retry 5 -o out/epw.pdf "$EPW"
+          file out/mueller.pdf out/epw.pdf | tee out/file_types.txt
+          grep -q 'PDF document' out/file_types.txt
+          pdftotext -layout out/mueller.pdf out/mueller.txt
+          pdftotext -layout out/epw.pdf out/epw.txt
+          grep -n -i -E 'main theorem|theorem [0-9]|assume|hypothes|ordinary|split|irreducible|class number|CM field|Kato' out/mueller.txt > out/mueller_key_lines.txt || true
+          grep -n -E 'Theorem 1\.|Corollary 1\.|absolutely irreducible|p-ordinary|p-distinguished|main conjecture holds' out/epw.txt > out/epw_key_lines.txt || true
+          sed -n '1,260p' out/mueller.txt > out/mueller_first_pages.txt
+          sed -n '1,180p' out/epw.txt > out/epw_first_pages.txt
+          sha256sum out/mueller.pdf out/epw.pdf out/mueller.txt out/epw.txt > out/source_sha256.txt
+
+      - name: Compute exact CM anchor data
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat > out/anchor.gp <<'GP'
+          E=ellinit([0,-1,1,-7,10]);
+          N=ellglobalred(E)[1];
+          a3=ellap(E,3);
+          n3=3+1-a3;
+          ar=ellanalyticrank(E);
+          lm=ellpadiclambdamu(E,3);
+          print("label=121b1");
+          print("model=[0,-1,1,-7,10]");
+          print("conductor=",N);
+          print("a3=",a3);
+          print("E_F3_cardinality=",n3);
+          print("ordinary=",a3%3!=0);
+          print("p_distinguished_roots_mod3=0,",(-a3)%3);
+          print("analytic_rank_data=",ar);
+          print("ellpadiclambdamu=",lm);
+          quit
+          GP
+          gp -fq < out/anchor.gp | tee out/anchor_exact.txt
+          grep -q '^conductor=121$' out/anchor_exact.txt
+          grep -q '^a3=-1$' out/anchor_exact.txt
+          grep -q '^ordinary=1$' out/anchor_exact.txt
+          grep -q '^ellpadiclambdamu=\[1, 0\]$' out/anchor_exact.txt
+          sha256sum out/anchor.gp out/anchor_exact.txt >> out/source_sha256.txt
+
+      - name: Produce theorem-extraction summary
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import json, pathlib, re, hashlib
+          root=pathlib.Path('out')
+          txt=(root/'mueller.txt').read_text(errors='replace')
+          epw=(root/'epw.txt').read_text(errors='replace')
+          def around(text, pattern, radius=1000):
+              m=re.search(pattern,text,re.I)
+              if not m: return None
+              return text[max(0,m.start()-radius):min(len(text),m.end()+radius)]
+          theorem_patterns=[r'Theorem\s+1\.1',r'Theorem\s+1\.2',r'Theorem\s+5\.\d+',r'main theorem']
+          snippets={p:around(txt,p,1800) for p in theorem_patterns}
+          summary={
+            'schema':'bsd-c516-cm-hida-source-audit-v1',
+            'mueller_pdf_sha256':hashlib.sha256((root/'mueller.pdf').read_bytes()).hexdigest(),
+            'epw_pdf_sha256':hashlib.sha256((root/'epw.pdf').read_bytes()).hexdigest(),
+            'mueller_page_count':int(__import__('subprocess').check_output(['pdfinfo',str(root/'mueller.pdf')]).decode().split('Pages:')[1].splitlines()[0].strip()),
+            'mueller_theorem_snippets':snippets,
+            'epw_theorem1_present':'If µ' in epw and 'for all f' in epw,
+            'anchor_exact':(root/'anchor_exact.txt').read_text().splitlines(),
+          }
+          (root/'SUMMARY.json').write_text(json.dumps(summary,sort_keys=True,indent=2)+'\n')
+          PY
+          sha256sum out/SUMMARY.json >> out/source_sha256.txt
+          ls -lh out
+
+      - name: Upload audit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: c516-cm-hida-anchor-audit
+          path: out
+          if-no-files-found: error
+          retention-days: 3
