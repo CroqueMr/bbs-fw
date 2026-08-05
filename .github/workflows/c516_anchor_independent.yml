@@ -1,0 +1,74 @@
+name: C516 Independent CM Anchor Reproduction
+
+on:
+  push:
+    branches: [c516-cm-hida-anchor-20260806]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install PARI-GP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pari-gp
+
+      - name: Reproduce exact anchor and target data
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          cat > out/reproduce.gp <<'GP'
+          K=bnfinit(x^2-x+3);
+          P=idealprimedec(K,11)[1];
+          R=bnrinit(K,P,1);
+          E0=ellinit([0,-1,1,-7,10]);
+          Ea=ellinit([0,-1,1,-5698610837,-165575711809938]);
+          Eb=ellinit([0,-1,1,-47095957,124416608755]);
+          print("pari_version=",version());
+          print("cm_discriminant=-11");
+          print("cm_class_number=",K.no);
+          print("cm_roots_of_unity=",K.tu[1]);
+          print("ray_class_number_mod_ramified_11=",bnrclassno(R));
+          print("ray_class_structure=",R.cyc);
+          print("three_splits=",kronecker(-11,3));
+          print("anchor_conductor=",ellglobalred(E0)[1]);
+          print("anchor_a3=",ellap(E0,3));
+          print("anchor_F3_cardinality=",4-ellap(E0,3));
+          print("anchor_analytic_rank=",ellanalyticrank(E0));
+          print("anchor_padic_lambda_mu=",ellpadiclambdamu(E0,3));
+          print("target_a_conductor=",ellglobalred(Ea)[1]);
+          print("target_a_a3=",ellap(Ea,3));
+          print("target_a_analytic_rank=",ellanalyticrank(Ea));
+          print("target_b_conductor=",ellglobalred(Eb)[1]);
+          print("target_b_a3=",ellap(Eb,3));
+          print("target_b_analytic_rank=",ellanalyticrank(Eb));
+          quit
+          GP
+          gp -fq < out/reproduce.gp | tee out/reproduce.out
+          grep -q '^cm_class_number=1$' out/reproduce.out
+          grep -q '^cm_roots_of_unity=2$' out/reproduce.out
+          grep -q '^ray_class_number_mod_ramified_11=5$' out/reproduce.out
+          grep -q '^three_splits=1$' out/reproduce.out
+          grep -q '^anchor_conductor=121$' out/reproduce.out
+          grep -q '^anchor_a3=-1$' out/reproduce.out
+          grep -q '^anchor_padic_lambda_mu=\[1, 0\]$' out/reproduce.out
+          grep -q '^target_a_conductor=333839$' out/reproduce.out
+          grep -q '^target_a_a3=-1$' out/reproduce.out
+          grep -q '^target_b_conductor=333839$' out/reproduce.out
+          grep -q '^target_b_a3=-1$' out/reproduce.out
+          sha256sum out/reproduce.gp out/reproduce.out > out/SHA256SUMS.txt
+
+      - name: Upload independent certificate
+        uses: actions/upload-artifact@v4
+        with:
+          name: c516-independent-cm-anchor
+          path: out
+          if-no-files-found: error
+          retention-days: 3
