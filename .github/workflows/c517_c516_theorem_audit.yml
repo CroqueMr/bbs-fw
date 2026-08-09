@@ -1,0 +1,89 @@
+name: C517 Audit C516 Theorem Chain
+
+on:
+  push:
+    branches: [c517-c516-proof-audit-20260810]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates poppler-utils python3
+
+      - name: Download primary papers
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          curl -fL --retry 8 -A 'Mozilla/5.0' -o out/greenberg_vatsal.pdf https://arxiv.org/pdf/math/9906215.pdf
+          curl -fL --retry 8 -A 'Mozilla/5.0' -o out/jlk.pdf https://arxiv.org/pdf/0804.2828.pdf
+          curl -fL --retry 8 -A 'Mozilla/5.0' -o out/yan_zhu.pdf https://arxiv.org/pdf/2412.20078.pdf
+          file out/*.pdf | tee out/file_types.txt
+          test $(grep -c 'PDF document' out/file_types.txt) -eq 3
+          for f in greenberg_vatsal jlk yan_zhu; do pdftotext -layout "out/$f.pdf" "out/$f.txt"; done
+          pdfinfo out/greenberg_vatsal.pdf > out/greenberg_vatsal_pdfinfo.txt
+          pdfinfo out/jlk.pdf > out/jlk_pdfinfo.txt
+          pdfinfo out/yan_zhu.pdf > out/yan_zhu_pdfinfo.txt
+
+      - name: Extract exact theorem neighborhoods
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat > extract.py <<'PY'
+          import json, pathlib, re, hashlib
+          root=pathlib.Path('out')
+          def numbered(path):
+              lines=path.read_text(errors='replace').splitlines()
+              return lines
+          def neighborhoods(lines, patterns, radius=45, max_each=20):
+              ans=[]
+              for pat in patterns:
+                  rx=re.compile(pat,re.I)
+                  hits=[]
+                  for i,line in enumerate(lines):
+                      if rx.search(line):
+                          a=max(0,i-radius); b=min(len(lines),i+radius+1)
+                          hits.append({'pattern':pat,'hit_line':i+1,'start':a+1,'end':b,'text':'\n'.join(f'{j+1:06d}: {lines[j]}' for j in range(a,b))})
+                          if len(hits)>=max_each: break
+                  ans.extend(hits)
+              return ans
+          gv=numbered(root/'greenberg_vatsal.txt')
+          jlk=numbered(root/'jlk.txt')
+          yz=numbered(root/'yan_zhu.txt')
+          result={
+            'schema':'bsd-c517-primary-theorem-text-audit-v1',
+            'greenberg_vatsal': neighborhoods(gv,[r'Theorem\s+1\.4',r'Theorem\s+1\.5',r'Theorem\s+1\.2',r'Proposition\s+3\.1',r'Remark\s+3\.4',r'\Sigma_0',r'lambda.*local',r'imprimitive',r'\mu.*0']),
+            'jlk': neighborhoods(jlk,[r'Theorem\s+1\.1',r'Theorem\s+1\.2',r'Theorem\s+5\.',r'non-equivariant main conjecture',r'all prime',r'elliptic curve',r'Hecke character']),
+            'yan_zhu': neighborhoods(yz,[r'Theorem\s+5\.2',r'Theorem\s+5\.11',r'\(Im\)',r'BSD',r'characteristic ideal',r'Q_p']),
+            'sha256': {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in root.glob('*.pdf')}
+          }
+          (root/'THEOREM_AUDIT.json').write_text(json.dumps(result,sort_keys=True,indent=2)+'\n')
+          for key in ('greenberg_vatsal','jlk','yan_zhu'):
+              with (root/(key+'_theorem_neighborhoods.txt')).open('w') as fh:
+                  for item in result[key]:
+                      fh.write('='*100+'\n')
+                      fh.write(f"PATTERN {item['pattern']} HIT {item['hit_line']} RANGE {item['start']}-{item['end']}\n")
+                      fh.write(item['text']+'\n')
+          PY
+          python3 extract.py
+          grep -n -i -E 'Theorem 1\.4|Theorem 1\.5|imprimitive|Sigma_0|lambda|mu' out/greenberg_vatsal_theorem_neighborhoods.txt | head -200 > out/gv_index.txt || true
+          grep -n -i -E 'Theorem 5\.2|Theorem 5\.11|BSD|Im' out/yan_zhu_theorem_neighborhoods.txt | head -200 > out/yz_index.txt || true
+          sha256sum out/* > out/SHA256SUMS.txt
+          ls -lh out
+
+      - name: Upload theorem audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: c517-c516-theorem-audit
+          path: out
+          if-no-files-found: error
+          retention-days: 5
