@@ -42,9 +42,8 @@ jobs:
           import json, pathlib, re, hashlib
           root=pathlib.Path('out')
           def numbered(path):
-              lines=path.read_text(errors='replace').splitlines()
-              return lines
-          def neighborhoods(lines, patterns, radius=45, max_each=20):
+              return path.read_text(errors='replace').splitlines()
+          def neighborhoods(lines, patterns, radius=55, max_each=20):
               ans=[]
               for pat in patterns:
                   rx=re.compile(pat,re.I)
@@ -61,8 +60,8 @@ jobs:
           yz=numbered(root/'yan_zhu.txt')
           result={
             'schema':'bsd-c517-primary-theorem-text-audit-v1',
-            'greenberg_vatsal': neighborhoods(gv,[r'Theorem\s+1\.4',r'Theorem\s+1\.5',r'Theorem\s+1\.2',r'Proposition\s+3\.1',r'Remark\s+3\.4',r'\Sigma_0',r'lambda.*local',r'imprimitive',r'\mu.*0']),
-            'jlk': neighborhoods(jlk,[r'Theorem\s+1\.1',r'Theorem\s+1\.2',r'Theorem\s+5\.',r'non-equivariant main conjecture',r'all prime',r'elliptic curve',r'Hecke character']),
+            'greenberg_vatsal': neighborhoods(gv,[r'Theorem\s+\(1\.4\)',r'Theorem\s+1\.4',r'Theorem\s+\(1\.5\)',r'Theorem\s+\(1\.2\)',r'Proposition\s+3\.1',r'Remark\s+3\.4',r'Sigma.?0',r'lambda.*local',r'imprimitive',r'mu.*0']),
+            'jlk': neighborhoods(jlk,[r'Theorem\s+1\.1',r'Theorem\s+1\.2',r'Theorem\s+5\.',r'non.?equivariant main conjecture',r'all prime',r'elliptic curve',r'Hecke character']),
             'yan_zhu': neighborhoods(yz,[r'Theorem\s+5\.2',r'Theorem\s+5\.11',r'\(Im\)',r'BSD',r'characteristic ideal',r'Q_p']),
             'sha256': {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in root.glob('*.pdf')}
           }
@@ -75,12 +74,13 @@ jobs:
                       fh.write(item['text']+'\n')
           PY
           python3 extract.py
-          grep -n -i -E 'Theorem 1\.4|Theorem 1\.5|imprimitive|Sigma_0|lambda|mu' out/greenberg_vatsal_theorem_neighborhoods.txt | head -200 > out/gv_index.txt || true
-          grep -n -i -E 'Theorem 5\.2|Theorem 5\.11|BSD|Im' out/yan_zhu_theorem_neighborhoods.txt | head -200 > out/yz_index.txt || true
+          grep -n -i -E 'Theorem.*1\.4|Theorem.*1\.5|imprimitive|Sigma|lambda|mu' out/greenberg_vatsal_theorem_neighborhoods.txt | head -300 > out/gv_index.txt || true
+          grep -n -i -E 'Theorem 5\.2|Theorem 5\.11|BSD|Im' out/yan_zhu_theorem_neighborhoods.txt | head -300 > out/yz_index.txt || true
           sha256sum out/* > out/SHA256SUMS.txt
           ls -lh out
 
       - name: Upload theorem audit
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: c517-c516-theorem-audit
