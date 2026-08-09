@@ -30,41 +30,38 @@ jobs:
           q1=31;
           q2=89;
           N=N0*q1*q2;
-          index=N*(1+1/11)*(1+1/31)*(1+1/89);
-          B=floor(2*index/12);
+          idx=N*(1+1/11)*(1+1/31)*(1+1/89);
+          B=floor(2*idx/12);
           E0=ellinit([0,-1,1,-7,10]);
           Ea=ellinit([0,-1,1,-5698610837,-165575711809938]);
           Eb=ellinit([0,-1,1,-47095957,124416608755]);
-          if(ellglobalred(E0)[1]!=N0,error("bad anchor conductor"));
-          if(ellglobalred(Ea)[1]!=N,error("bad target a conductor"));
-          if(ellglobalred(Eb)[1]!=N,error("bad target b conductor"));
+          if(ellglobalred(E0)[1]!=N0,print("FATAL=bad_anchor_conductor");quit(1));
+          if(ellglobalred(Ea)[1]!=N,print("FATAL=bad_target_a_conductor");quit(1));
+          if(ellglobalred(Eb)[1]!=N,print("FATAL=bad_target_b_conductor");quit(1));
           A0=ellan(E0,B);
           Aa=ellan(Ea,B);
           Ab=ellan(Eb,B);
-          targets=[Ea,Eb];
-          arrays=[Aa,Ab];
-          labels=["333839a1","333839b1"];
           print("STURM_BOUND=",B);
-          print("INDEX=",index);
+          print("INDEX=",idx);
           print("ANCHOR_A31=",ellap(E0,q1));
           print("ANCHOR_A89=",ellap(E0,q2));
-          for(k=1,2,
-            E=targets[k]; At=arrays[k]; label=labels[k];
+          checktarget(E,At,label)={
+            my(alpha1,alpha2,beta1,beta2,mism,c);
             alpha1=lift(Mod(ellap(E,q1),p));
             alpha2=lift(Mod(ellap(E,q2),p));
-            if(alpha1==0 || alpha2==0,error("zero U eigenvalue"));
+            if(alpha1==0 || alpha2==0,print("FATAL=zero_U_",label);quit(1));
             beta1=lift(Mod(q1,p)/Mod(alpha1,p));
             beta2=lift(Mod(q2,p)/Mod(alpha2,p));
             mism=List();
-            for(n=1,B,
+            for(n=1,B,{
               c=A0[n];
               if(n%q1==0,c-=beta1*A0[n/q1]);
               if(n%q2==0,c-=beta2*A0[n/q2]);
               if(n%(q1*q2)==0,c+=beta1*beta2*A0[n/(q1*q2)]);
-              if(lift(Mod(c-At[n],p))!=0,
-                if(#mism<20,listput(mism,[n,c,At[n],lift(Mod(c,p)),lift(Mod(At[n],p))]))
-              );
-            );
+              if(lift(Mod(c-At[n],p))!=0,{
+                if(#mism<20,listput(mism,[n,c,At[n],lift(Mod(c,p)),lift(Mod(At[n],p))]));
+              });
+            });
             print("TARGET=",label);
             print("U31_MOD3=",alpha1);
             print("BETA31_MOD3=",beta1);
@@ -72,12 +69,22 @@ jobs:
             print("BETA89_MOD3=",beta2);
             print("MISMATCH_COUNT_CAPPED=",#mism);
             print("FIRST_MISMATCHES=",Vec(mism));
-            if(#mism,error("Sturm mismatch for ",label));
-          );
+            if(#mism,print("FATAL=Sturm_mismatch_",label);quit(1));
+            return(1);
+          };
+          checktarget(Ea,Aa,"333839a1");
+          checktarget(Eb,Ab,"333839b1");
           print("C517_STURM_CERTIFIED");
-          quit
+          quit(0)
           GP
-          gp -fq < out/sturm.gp | tee out/sturm.out
+          set +e
+          gp -fq < out/sturm.gp > out/sturm.out 2> out/sturm.err
+          RC=$?
+          set -e
+          cat out/sturm.out
+          cat out/sturm.err
+          test "$RC" -eq 0
+          test ! -s out/sturm.err
           grep -q '^STURM_BOUND=63360$' out/sturm.out
           test $(grep -c '^MISMATCH_COUNT_CAPPED=0$' out/sturm.out) -eq 2
           grep -q '^C517_STURM_CERTIFIED$' out/sturm.out
@@ -97,9 +104,12 @@ jobs:
               d={'label':lines[0].strip()}
               for key in ('U31_MOD3','BETA31_MOD3','U89_MOD3','BETA89_MOD3','MISMATCH_COUNT_CAPPED'):
                   m=re.search(rf'^{key}=(-?\d+)$',block,re.M)
+                  if not m: raise SystemExit(f'missing {key} for {d["label"]}')
                   d[key.lower()]=int(m.group(1))
               d['sturm_congruent']=d['mismatch_count_capped']==0
               targets.append(d)
+          if len(targets)!=2 or not all(t['sturm_congruent'] for t in targets):
+              raise SystemExit('target certificate mismatch')
           cert={
             'schema':'bsd-c517-cm-anchor-target-sturm-v1',
             'prime':3,
@@ -109,7 +119,7 @@ jobs:
             'sturm_bound':63360,
             'stabilization_formula':'(1-beta31*V31)(1-beta89*V89) f_121b1 modulo 3',
             'targets':targets,
-            'conclusion':'The stabilized anchor newform and each target newform are congruent modulo 3 through the full Sturm bound; the irreducible residual Galois modules are isomorphic.',
+            'conclusion':'The stabilized anchor newform and each target newform are congruent modulo 3 through the full Sturm bound; since the residual representation is irreducible, the residual Galois modules are isomorphic.',
             'status':'PROVED',
             'validation_level':'INDEPENDENTLY_REPRODUCED',
             'pari_version':subprocess.check_output(['gp','-fq'],input=b'print(version())\nquit\n').decode().strip(),
@@ -117,7 +127,7 @@ jobs:
           }
           (root/'CERTIFICATE.json').write_text(json.dumps(cert,sort_keys=True,indent=2)+'\n',encoding='utf-8',newline='\n')
           PY
-          sha256sum out/sturm.gp out/sturm.out out/CERTIFICATE.json > out/SHA256SUMS.txt
+          sha256sum out/sturm.gp out/sturm.out out/sturm.err out/CERTIFICATE.json > out/SHA256SUMS.txt
           cat out/CERTIFICATE.json
 
       - name: Upload Sturm certificate
