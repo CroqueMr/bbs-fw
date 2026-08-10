@@ -1,0 +1,90 @@
+name: C529 Isogeny Graph Table Freeze
+
+on:
+  push:
+    branches: [c529-isogeny-minimization-20260811]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install extraction tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates poppler-utils python3
+
+      - name: Download and extract the primary paper
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          curl -fL --retry 8 -A 'Mozilla/5.0' -o out/chiloyan.pdf https://arxiv.org/pdf/2302.06094
+          file out/chiloyan.pdf | tee out/file_type.txt
+          grep -q 'PDF document' out/file_type.txt
+          pdftotext -layout out/chiloyan.pdf out/chiloyan_layout.txt
+          pdftotext -f 41 -l 48 -layout out/chiloyan.pdf out/tables_10_19_layout.txt
+          pdfinfo out/chiloyan.pdf > out/pdfinfo.txt
+          curl -fL --retry 4 -A 'Mozilla/5.0' -o out/source.tar https://export.arxiv.org/e-print/2302.06094 || true
+          if [ -s out/source.tar ]; then
+            mkdir -p out/source
+            tar -xf out/source.tar -C out/source || true
+            find out/source -maxdepth 3 -type f -print | sort > out/source_files.txt
+            grep -RIn --include='*.tex' -E 'Table 10|Table 11|Table 12|Table 13|Table 14|Table 15|Table 16|Table 17|Table 18|Table 19' out/source > out/table_tex_locations.txt || true
+          fi
+          sha256sum out/chiloyan.pdf out/chiloyan_layout.txt out/tables_10_19_layout.txt > out/SHA256SUMS.txt
+
+      - name: Extract RZB-label arrangements
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import json, pathlib, re, hashlib
+          root=pathlib.Path('out')
+          text=(root/'chiloyan_layout.txt').read_text(errors='replace')
+          labels=re.findall(r'\bH(?:max)?[A-Za-z0-9]+\b', text)
+          counts={}
+          for x in labels: counts[x]=counts.get(x,0)+1
+          pages={}
+          lines=text.splitlines()
+          starts=[]
+          for i,line in enumerate(lines):
+              m=re.search(r'Table\s+(1[0-9])\.',line)
+              if m: starts.append((int(m.group(1)),i))
+          for j,(num,i) in enumerate(starts):
+              end=starts[j+1][1] if j+1<len(starts) else len(lines)
+              chunk='\n'.join(lines[i:end])
+              pages[str(num)]={
+                'start_line':i+1,
+                'end_line':end,
+                'labels':re.findall(r'\bH(?:max)?[A-Za-z0-9]+\b',chunk),
+                'text':chunk,
+              }
+          cert={
+            'schema':'bsd-c529-chiloyan-table-freeze-v1',
+            'paper':'arXiv:2302.06094v2',
+            'table_numbers':sorted(map(int,pages)),
+            'table_count':len(pages),
+            'label_occurrence_count':len(labels),
+            'distinct_labels':len(counts),
+            'label_counts':counts,
+            'tables':pages,
+            'pdf_sha256':hashlib.sha256((root/'chiloyan.pdf').read_bytes()).hexdigest(),
+          }
+          (root/'TABLE_CERTIFICATE.json').write_text(json.dumps(cert,sort_keys=True,indent=2)+'\n',encoding='utf-8',newline='\n')
+          PY
+          sha256sum out/TABLE_CERTIFICATE.json >> out/SHA256SUMS.txt
+          ls -lh out
+
+      - name: Upload frozen source and tables
+        uses: actions/upload-artifact@v4
+        with:
+          name: c529-chiloyan-isogeny-tables
+          path: out
+          if-no-files-found: error
+          retention-days: 5
