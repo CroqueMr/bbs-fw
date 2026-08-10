@@ -1,0 +1,40 @@
+name: C524 RZB 2-adic Data Freeze
+
+on:
+  push:
+    branches: [c524-rzb-2adic-universal-audit-20260810]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Fetch complete Rouse-Zureick-Brown data
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          curl -fL --retry 8 -A 'Mozilla/5.0' -o out/gl2data.gz https://users.wfu.edu/rouseja/2adic/gl2data.gz
+          curl -fL --retry 8 -A 'Mozilla/5.0' -o out/gl2finedata.gz https://users.wfu.edu/rouseja/2adic/gl2finedata.gz
+          gzip -dc out/gl2data.gz > out/gl2data.txt
+          gzip -dc out/gl2finedata.gz > out/gl2finedata.txt
+          sed -n '1,160p' out/gl2data.txt > out/gl2data_head.txt
+          sed -n '1,160p' out/gl2finedata.txt > out/gl2finedata_head.txt
+          wc -c -l out/gl2data.txt out/gl2finedata.txt > out/counts.txt
+          sha256sum out/gl2data.gz out/gl2finedata.gz out/gl2data.txt out/gl2finedata.txt > out/SHA256SUMS.txt
+          cat out/counts.txt
+          head -40 out/gl2data.txt
+          head -40 out/gl2finedata.txt
+
+      - name: Upload frozen data
+        uses: actions/upload-artifact@v4
+        with:
+          name: c524-rzb-2adic-data
+          path: out
+          if-no-files-found: error
+          retention-days: 5
